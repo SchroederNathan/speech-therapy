@@ -23,6 +23,8 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { TabListProps, TabTriggerSlotProps } from 'expo-router/ui';
 
+import { fonts } from '@/constants/fonts';
+
 import { MINIMIZE_SPRING, setMinimized, useMinimizeState } from './minimize-context';
 import { ProgressiveBlur } from './progressive-blur';
 
@@ -278,6 +280,31 @@ export function GlassTabBar({
     [slideIndex, isDragging, theme],
   );
 
+  const barContent = (
+    <>
+      <Animated.View
+        style={[
+          {
+            position: 'absolute',
+            left: 0,
+            backgroundColor: theme.highlight,
+            borderCurve: 'continuous',
+          },
+          highlightStyle,
+        ]}
+      />
+      <View
+        style={{
+          flex: 1,
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: ROW_PAD_H,
+        }}>
+        <BarContext.Provider value={barContext}>{children}</BarContext.Provider>
+      </View>
+    </>
+  );
+
   return (
     <View
       {...props}
@@ -299,47 +326,30 @@ export function GlassTabBar({
         pointerEvents="box-none"
         style={{ alignItems: 'center', marginBottom: bottomOffset }}>
         <GestureDetector gesture={gesture}>
-          <Animated.View style={barStyle}>
-            {isLiquidGlassAvailable() ? (
-              <AnimatedGlassView
-                glassEffectStyle="regular"
-                isInteractive
-                style={[
-                  StyleSheet.absoluteFill,
-                  { backgroundColor: theme.glassTint, borderCurve: 'continuous' },
-                  shapeStyle,
-                ]}
-              />
-            ) : (
-              <Animated.View
-                style={[
-                  StyleSheet.absoluteFill,
-                  { backgroundColor: theme.solidFallback, borderCurve: 'continuous' },
-                  shapeStyle,
-                ]}
-              />
-            )}
+          {/* The glass view IS the bar container: touches on the tabs land
+              inside its native bounds, so `isInteractive` responds to presses.
+              As a detached sibling it never receives them. */}
+          {isLiquidGlassAvailable() ? (
+            <AnimatedGlassView
+              glassEffectStyle="regular"
+              isInteractive
+              style={[
+                { backgroundColor: theme.glassTint, borderCurve: 'continuous' },
+                barStyle,
+                shapeStyle,
+              ]}>
+              {barContent}
+            </AnimatedGlassView>
+          ) : (
             <Animated.View
               style={[
-                {
-                  position: 'absolute',
-                  left: 0,
-                  backgroundColor: theme.highlight,
-                  borderCurve: 'continuous',
-                },
-                highlightStyle,
-              ]}
-            />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                alignItems: 'center',
-                paddingHorizontal: ROW_PAD_H,
-              }}>
-              <BarContext.Provider value={barContext}>{children}</BarContext.Provider>
-            </View>
-          </Animated.View>
+                { backgroundColor: theme.solidFallback, borderCurve: 'continuous' },
+                barStyle,
+                shapeStyle,
+              ]}>
+              {barContent}
+            </Animated.View>
+          )}
         </GestureDetector>
       </View>
     </View>
@@ -440,7 +450,7 @@ export function GlassTabButton({
         {/* Fades out and is clipped by the shrinking box — no layout anim. */}
         <Animated.Text
           numberOfLines={1}
-          style={[{ fontSize: 9.5, fontWeight: '600', marginTop: ITEM_GAP }, labelStyle]}>
+          style={[{ fontSize: 9.5, fontFamily: fonts.semibold, marginTop: ITEM_GAP }, labelStyle]}>
           {item.label}
         </Animated.Text>
       </Animated.View>
