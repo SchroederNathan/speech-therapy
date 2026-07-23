@@ -1,6 +1,22 @@
 import { BlurView } from 'expo-blur';
 import { View, ViewProps } from 'react-native';
 
+/** Shared falloff beyond floating navigation chrome. */
+export const CHROME_BLUR_BLEED = 44;
+
+const LAYER_HEIGHTS = [
+  '100%',
+  '88%',
+  '76%',
+  '64%',
+  '54%',
+  '44%',
+  '36%',
+  '28%',
+  '22%',
+  '16%',
+] as const;
+
 type Props = ViewProps & {
   intensity?: number;
   /** Which edge the blur is anchored to (strongest there, fading away). */
@@ -23,15 +39,14 @@ export function ProgressiveBlur({
   tint = 'dark',
   ...rest
 }: Props) {
-  const heights = ['100%', '88%', '76%', '64%', '54%', '44%', '36%', '28%', '22%', '16%'] as const;
   const anchor = direction === 'top' ? { top: 0 } : { bottom: 0 };
   const rgb = tint === 'dark' ? '0,0,0' : '255,255,255';
 
   return (
     <View pointerEvents="none" style={style} {...rest}>
-      {heights.map((height, index) => (
+      {LAYER_HEIGHTS.map((height) => (
         <BlurView
-          key={index}
+          key={height}
           tint={tint}
           intensity={intensity}
           style={{ position: 'absolute', left: 0, right: 0, height, ...anchor }}

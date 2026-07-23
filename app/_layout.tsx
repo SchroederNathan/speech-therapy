@@ -60,6 +60,10 @@ export default function RootLayout() {
       <NavThemeProvider>
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="session"
+            options={{ presentation: 'fullScreenModal', headerShown: false }}
+          />
         </Stack>
         <StatusBar style="auto" />
       </NavThemeProvider>

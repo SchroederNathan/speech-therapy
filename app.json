@@ -8,7 +8,13 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "icon": "./assets/app.icon",
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Allow $(PRODUCT_NAME) to use speech recognition to follow along as you read.",
+        "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to access your microphone so it can hear you read."
+      },
+      "bundleIdentifier": "com.exponathan.speech-companion"
     },
     "android": {
       "adaptiveIcon": {
@@ -17,7 +23,13 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,7 +47,16 @@
             "./assets/fonts/SF-Pro-Rounded-Heavy.otf"
           ]
         }
-      ]
+      ],
+      "expo-audio",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone so it can hear you read.",
+          "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to use speech recognition to follow along as you read."
+        }
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true

@@ -14,5 +14,5 @@ export {
   useTabBarMinimized,
   MINIMIZE_SPRING,
 } from './minimize-context';
-export { ProgressiveBlur } from './progressive-blur';
+export { CHROME_BLUR_BLEED, ProgressiveBlur } from './progressive-blur';
 export { renderFadingTabScreen } from './fading-tab-slot';

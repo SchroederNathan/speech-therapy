@@ -26,7 +26,7 @@ import type { TabListProps, TabTriggerSlotProps } from 'expo-router/ui';
 import { fonts } from '@/constants/fonts';
 
 import { MINIMIZE_SPRING, setMinimized, useMinimizeState } from './minimize-context';
-import { ProgressiveBlur } from './progressive-blur';
+import { CHROME_BLUR_BLEED, ProgressiveBlur } from './progressive-blur';
 
 const AnimatedGlassView = Animated.createAnimatedComponent(GlassView);
 
@@ -48,9 +48,6 @@ const ITEM_PAD_V = 7;
 /** Highlight content heights — radius must track h/2 for a true capsule. */
 const HIGHLIGHT_EXPANDED = ICON_SIZE + LABEL_BLOCK + ITEM_PAD_V * 2;
 const HIGHLIGHT_MINIMIZED = ICON_SIZE + ITEM_PAD_V * 2;
-/** How far the bottom progressive blur bleeds above the pill. */
-const BLUR_BLEED = 44;
-
 /**
  * Slide spring: interruptible by design — rapid tab-hopping retargets with
  * preserved velocity. Slight under-damping gives the pill a tiny settle,
@@ -319,7 +316,7 @@ export function GlassTabBar({
           left: 0,
           right: 0,
           bottom: 0,
-          height: bottomOffset + EXPANDED_HEIGHT + BLUR_BLEED,
+          height: bottomOffset + EXPANDED_HEIGHT + CHROME_BLUR_BLEED,
         }}
       />
       <View

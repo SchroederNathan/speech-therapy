@@ -1,6 +1,7 @@
 import { FireIcon, User03Icon } from '@hugeicons-pro/core-solid-rounded';
 import { HugeiconsIcon } from '@hugeicons/react-native';
 import { GlassContainer, GlassView } from 'expo-glass-effect';
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, Text, useColorScheme, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -8,63 +9,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DailyGoalCard } from '@/components/daily-goal-card';
 import { useMinimizeOnScroll } from '@/components/glass-tabs';
-import { PassageCarousel, type PassageItem } from '@/components/passage-carousel';
+import { PassageCarousel } from '@/components/passage-carousel';
 import { WeeklyProgress } from '@/components/weekly-progress';
 import { palette } from '@/constants/colors';
 import { fonts } from '@/constants/fonts';
+import { PASSAGES } from '@/constants/passages';
 
 const MINUTES_GOAL = 20;
 const STREAK_FLAME = '#FF9500';
-
-// Stub passages until real content exists; artwork alphas stay < 1 so the
-// cards' glass material reads through the gradients.
-const PASSAGES: PassageItem[] = [
-  {
-    id: 'epic-speech',
-    title: 'Epic Speech',
-    duration: '~2 mins',
-    artwork: {
-      base: ['rgba(45,75,230,0.95)', 'rgba(48,44,150,0.88)'],
-      blob: ['rgba(255,130,80,0.95)', 'rgba(240,80,190,0.65)'],
-    },
-  },
-  {
-    id: 'tongue-twisters',
-    title: 'Tongue Twisters',
-    duration: '~3 mins',
-    artwork: {
-      base: ['rgba(16,130,150,0.92)', 'rgba(24,86,180,0.85)'],
-      blob: ['rgba(120,255,190,0.9)', 'rgba(60,210,255,0.55)'],
-    },
-  },
-  {
-    id: 'calm-narration',
-    title: 'Calm Narration',
-    duration: '~4 mins',
-    artwork: {
-      base: ['rgba(130,60,220,0.92)', 'rgba(70,50,190,0.85)'],
-      blob: ['rgba(255,190,120,0.92)', 'rgba(255,110,180,0.55)'],
-    },
-  },
-  {
-    id: 'news-brief',
-    title: 'News Brief',
-    duration: '~2 mins',
-    artwork: {
-      base: ['rgba(220,120,40,0.92)', 'rgba(190,60,90,0.85)'],
-      blob: ['rgba(255,230,140,0.92)', 'rgba(255,150,90,0.55)'],
-    },
-  },
-  {
-    id: 'poetry-lines',
-    title: 'Poetry Lines',
-    duration: '~3 mins',
-    artwork: {
-      base: ['rgba(40,150,120,0.92)', 'rgba(30,100,160,0.85)'],
-      blob: ['rgba(180,255,220,0.9)', 'rgba(90,220,200,0.5)'],
-    },
-  },
-];
 
 function greeting() {
   const hour = new Date().getHours();
@@ -121,8 +73,10 @@ export default function HomeScreen() {
       <Text style={[styles.sectionSubtitle, { color: dark ? '#9E9EA6' : '#77777E' }]}>
         Sharpen your speaking with these passages
       </Text>
-      <PassageCarousel items={PASSAGES} onStart={startPractice} />
-      <PassageCarousel items={PASSAGES} onStart={startPractice} />
+      <PassageCarousel
+        items={PASSAGES}
+        onStart={(item) => router.push(`/session/${item.id}`)}
+      />
       {/* Placeholder cards keep enough scroll to exercise the tab bar minimize. */}
       {Array.from({ length: 8 }, (_, i) => (
         <View key={i} style={[styles.card, { backgroundColor: colors.card }]} />
