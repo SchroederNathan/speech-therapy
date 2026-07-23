@@ -42,14 +42,12 @@ const THEME = {
     // Light backgrounds shine through glass more, so the tint is stronger.
     glassTint: 'rgba(14,14,22,0.60)',
     solidFallback: 'rgba(20,20,28,0.98)',
-    buttonTint: 'rgba(20,20,26,0.35)',
-    buttonSolid: 'rgba(255,255,255,0.22)',
+    buttonFill: 'rgba(255,255,255,0.22)',
   },
   dark: {
     glassTint: 'rgba(10,10,16,0.45)',
     solidFallback: 'rgba(18,18,24,0.98)',
-    buttonTint: 'rgba(20,20,26,0.35)',
-    buttonSolid: 'rgba(255,255,255,0.22)',
+    buttonFill: 'rgba(255,255,255,0.22)',
   },
 } as const;
 
@@ -180,31 +178,20 @@ const PassageCard = memo(function PassageCard({
     </>
   );
 
-  return (
-    <Animated.View style={[{ width: itemWidth }, styles.item, rCardStyle]}>
-      <View style={styles.clip}>
-        {/* The card's glass sits as an absolute sibling under the content, so
-            the button's own GlassView below is never nested inside another
-            glass effect (nested glass doesn't render on iOS 26). */}
-        {hasGlass ? (
-          <GlassView
-            glassEffectStyle="regular"
-            style={[
-              StyleSheet.absoluteFill,
-              styles.cardShape,
-              { backgroundColor: theme.glassTint },
-            ]}
-          />
-        ) : (
-          <View
-            style={[
-              StyleSheet.absoluteFill,
-              styles.cardShape,
-              { backgroundColor: theme.solidFallback },
-            ]}
-          />
-        )}
-
+  // Card artwork + text live INSIDE the card's GlassView: the native glass
+  // effect only reacts to touches that land in the glass view's own subtree,
+  // so an absolute-sibling underlay never shimmers (same finding as the tab
+  // bar — the glass view must be the container that gets pressed).
+  const cardBody = (
+    <>
+      {/* The art clips to the card shape HERE (not on an outer wrapper) so
+          the glass view itself can overflow its bounds — the interactive
+          press response scales the glass up slightly and an outer
+          overflow:hidden would swallow it.
+          Children must stay HIT-TESTABLE (no pointerEvents="none"): the
+          native glass mounts them inside the effect view's contentView, and
+          the interactive response only fires when a touch lands there. */}
+      <View style={styles.artClip}>
         {/* Art fades out by ~78% height so the bottom third stays true glass;
             one gradient per view — multi-background strings aren't supported. */}
         <View
@@ -238,29 +225,43 @@ const PassageCard = memo(function PassageCard({
             },
           ]}
         />
-
-        <View style={styles.content}>
-          <Text style={styles.title} numberOfLines={2}>
-            {item.title}
-          </Text>
-          <Text style={styles.duration}>{item.duration}</Text>
-          <Pressable onPress={handleStart} style={({ pressed }) => pressed && { opacity: 0.85 }}>
-            {hasGlass ? (
-              <GlassView
-                glassEffectStyle="regular"
-                isInteractive
-                tintColor={theme.buttonTint}
-                style={styles.button}>
-                {buttonContent}
-              </GlassView>
-            ) : (
-              <View style={[styles.button, { backgroundColor: theme.buttonSolid }]}>
-                {buttonContent}
-              </View>
-            )}
-          </Pressable>
+      </View>
+      <View style={styles.content}>
+        <Text style={styles.title} numberOfLines={2}>
+          {item.title}
+        </Text>
+        <Text style={styles.duration}>{item.duration}</Text>
+        {/* Purely visual affordance — the WHOLE card is the pressable. The
+            pill lives INSIDE the card's glass so it expands with the
+            interactive response; it can't be its own GlassView because
+            nested glass doesn't render on iOS 26. */}
+        <View style={[styles.button, { backgroundColor: theme.buttonFill }]}>
+          {buttonContent}
         </View>
       </View>
+    </>
+  );
+
+  return (
+    <Animated.View style={[{ width: itemWidth }, styles.item, rCardStyle]}>
+      {/* The whole card is the button; the native interactive glass supplies
+          the press feedback, so no pressed-opacity (dropping opacity can
+          also disable the glass effect entirely). */}
+      <Pressable onPress={handleStart} style={styles.clip}>
+        {hasGlass ? (
+          <GlassView
+            glassEffectStyle="regular"
+            isInteractive
+            style={[styles.cardFill, styles.cardShape, { backgroundColor: theme.glassTint }]}>
+            {cardBody}
+          </GlassView>
+        ) : (
+          <View
+            style={[styles.cardFill, styles.cardShape, { backgroundColor: theme.solidFallback }]}>
+            {cardBody}
+          </View>
+        )}
+      </Pressable>
 
       {/* Off-center depth blur, iOS only (parity with the reference app). */}
       {Platform.OS === 'ios' && (
@@ -281,15 +282,27 @@ const styles = StyleSheet.create({
     aspectRatio: CARD_ASPECT,
     padding: ITEM_GAP,
   },
+  // Deliberately NO overflow:'hidden' here — the interactive glass response
+  // grows past the card bounds and must stay visible.
   clip: {
     flex: 1,
-    borderRadius: CARD_RADIUS,
-    borderCurve: 'continuous',
-    overflow: 'hidden',
   },
   cardShape: {
     borderRadius: CARD_RADIUS,
     borderCurve: 'continuous',
+  },
+  artClip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: CARD_RADIUS,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+  },
+  cardFill: {
+    flex: 1,
   },
   content: {
     flex: 1,
