@@ -229,7 +229,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     // Anchors the caption on the ring's centre; the percent hangs below it,
     // inside the ring's hollow.
-    top: CENTER_Y - 9,
+    top: CENTER_Y -4,
     left: 0,
     right: 0,
     alignItems: 'center',

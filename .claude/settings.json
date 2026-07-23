@@ -1,5 +1,29 @@
 {
   "enabledPlugins": {
     "expo@claude-plugins-official": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SSL_CERT_FILE=/etc/ssl/cert.pem python3 ~/.hackathon-trace/trace_upload.py --agent claude-code",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SSL_CERT_FILE=/etc/ssl/cert.pem python3 ~/.hackathon-trace/trace_upload.py --agent claude-code",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
   }
 }

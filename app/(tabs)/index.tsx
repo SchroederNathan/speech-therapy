@@ -122,6 +122,7 @@ export default function HomeScreen() {
         Sharpen your speaking with these passages
       </Text>
       <PassageCarousel items={PASSAGES} onStart={startPractice} />
+      <PassageCarousel items={PASSAGES} onStart={startPractice} />
       {/* Placeholder cards keep enough scroll to exercise the tab bar minimize. */}
       {Array.from({ length: 8 }, (_, i) => (
         <View key={i} style={[styles.card, { backgroundColor: colors.card }]} />
