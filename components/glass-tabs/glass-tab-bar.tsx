@@ -303,6 +303,7 @@ export function GlassTabBar({
             {isLiquidGlassAvailable() ? (
               <AnimatedGlassView
                 glassEffectStyle="regular"
+                isInteractive
                 style={[
                   StyleSheet.absoluteFill,
                   { backgroundColor: theme.glassTint, borderCurve: 'continuous' },
