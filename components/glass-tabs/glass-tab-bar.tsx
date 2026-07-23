@@ -8,6 +8,8 @@ import {
   StyleSheet,
   useColorScheme,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -18,6 +20,7 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  type AnimatedStyle,
   type SharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -103,6 +106,10 @@ export type GlassTabBarProps = TabListProps & {
   theme?: Partial<GlassTabBarTheme>;
   /** Haptic tick while the scrub crosses tab boundaries (iOS). */
   haptics?: boolean;
+  /** Extra (animated) style on the bar's root — e.g. the app-intro entrance.
+   * A prop instead of a wrapper view because expo-router's TabList must keep
+   * the bar as its direct `asChild` element for trigger parsing. */
+  entranceStyle?: StyleProp<AnimatedStyle<ViewStyle>>;
 };
 
 /**
@@ -115,6 +122,7 @@ export function GlassTabBar({
   onIndexSelected,
   theme: themeOverrides,
   haptics = true,
+  entranceStyle,
   ...props
 }: GlassTabBarProps) {
   const insets = useSafeAreaInsets();
@@ -303,10 +311,10 @@ export function GlassTabBar({
   );
 
   return (
-    <View
+    <Animated.View
       {...props}
       pointerEvents="box-none"
-      style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}>
+      style={[{ position: 'absolute', left: 0, right: 0, bottom: 0 }, entranceStyle]}>
       {/* Progressive blur rising from the screen's bottom edge behind the pill. */}
       <ProgressiveBlur
         direction="bottom"
@@ -349,7 +357,7 @@ export function GlassTabBar({
           )}
         </GestureDetector>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 

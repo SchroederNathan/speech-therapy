@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DailyGoalCard } from '@/components/daily-goal-card';
 import { useMinimizeOnScroll } from '@/components/glass-tabs';
 import { PassageCarousel } from '@/components/passage-carousel';
+import { IntroReveal } from '@/components/splash';
 import { WeeklyProgress } from '@/components/weekly-progress';
 import { palette } from '@/constants/colors';
 import { fonts } from '@/constants/fonts';
@@ -50,37 +51,55 @@ export default function HomeScreen() {
         paddingHorizontal: 20,
         paddingBottom: 140,
       }}>
+      {/* Intro stagger: chrome (header, slot 0 with the tab bar) first, then
+          the content cascades top-to-bottom. Anything holding a GlassView
+          animates transform-only (fade: false) — glass breaks under animated
+          opacity — and gets its fade-in from the splash overlay instead. */}
       <View style={styles.header}>
-        <Text style={[styles.greeting, { color: colors.foreground }]}>{greeting()}</Text>
-        {/* GlassContainer lets the capsules merge fluidly when they get close. */}
-        <GlassContainer spacing={8} style={styles.headerItems}>
-          <GlassView isInteractive style={styles.streak}>
-            <HugeiconsIcon icon={FireIcon} size={24} color={STREAK_FLAME} />
-            <Text style={[styles.streakCount, { color: colors.foreground }]}>1</Text>
-          </GlassView>
-          <GlassView isInteractive style={styles.avatar}>
-            <HugeiconsIcon
-              icon={User03Icon}
-              size={24}
-              color={dark ? '#8E8E93' : '#98989E'}
-            />
-          </GlassView>
-        </GlassContainer>
+        <IntroReveal order={0}>
+          <Text style={[styles.greeting, { color: colors.foreground }]}>{greeting()}</Text>
+        </IntroReveal>
+        <IntroReveal order={0} fade={false}>
+          {/* GlassContainer lets the capsules merge fluidly when they get close. */}
+          <GlassContainer spacing={8} style={styles.headerItems}>
+            <GlassView isInteractive style={styles.streak}>
+              <HugeiconsIcon icon={FireIcon} size={24} color={STREAK_FLAME} />
+              <Text style={[styles.streakCount, { color: colors.foreground }]}>1</Text>
+            </GlassView>
+            <GlassView isInteractive style={styles.avatar}>
+              <HugeiconsIcon
+                icon={User03Icon}
+                size={24}
+                color={dark ? '#8E8E93' : '#98989E'}
+              />
+            </GlassView>
+          </GlassContainer>
+        </IntroReveal>
       </View>
-      <WeeklyProgress todayProgress={percent / 100} />
-      <DailyGoalCard percent={percent} onStartPractice={startPractice} />
-      <Text style={[styles.sectionTitle, { color: colors.foreground }]}>For you</Text>
-      <Text style={[styles.sectionSubtitle, { color: dark ? '#9E9EA6' : '#77777E' }]}>
-        Sharpen your speaking with these passages
-      </Text>
-      <PassageCarousel
-        items={PASSAGES}
-        onStart={(item) => router.push(`/session/${item.id}`)}
-      />
+      <IntroReveal order={1}>
+        <WeeklyProgress todayProgress={percent / 100} />
+      </IntroReveal>
+      <IntroReveal order={2} fade={false}>
+        <DailyGoalCard percent={percent} onStartPractice={startPractice} />
+      </IntroReveal>
+      <IntroReveal order={3}>
+        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>For you</Text>
+        <Text style={[styles.sectionSubtitle, { color: dark ? '#9E9EA6' : '#77777E' }]}>
+          Sharpen your speaking with these passages
+        </Text>
+      </IntroReveal>
+      <IntroReveal order={4} fade={false}>
+        <PassageCarousel
+          items={PASSAGES}
+          onStart={(item) => router.push(`/session/${item.id}`)}
+        />
+      </IntroReveal>
       {/* Placeholder cards keep enough scroll to exercise the tab bar minimize. */}
-      {Array.from({ length: 8 }, (_, i) => (
-        <View key={i} style={[styles.card, { backgroundColor: colors.card }]} />
-      ))}
+      <IntroReveal order={5}>
+        {Array.from({ length: 8 }, (_, i) => (
+          <View key={i} style={[styles.card, { backgroundColor: colors.card }]} />
+        ))}
+      </IntroReveal>
     </Animated.ScrollView>
   );
 }

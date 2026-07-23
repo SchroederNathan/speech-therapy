@@ -3,10 +3,11 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import { Stack } from 'expo-router/stack';
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { IntroRevealProvider, SplashOverlay } from '@/components/splash';
 import { palette } from '@/constants/colors';
 import { fontAssets, fonts } from '@/constants/fonts';
 
@@ -47,26 +48,40 @@ function NavThemeProvider({ children }: { children: ReactNode }) {
 }
 
 export default function RootLayout() {
-  // Expo Go can't embed fonts at build time, so load them here. The root view
-  // stays on the themed background color (via expo-system-ui) until ready,
-  // so the brief wait reads as launch, not a flash.
+  // Expo Go can't embed fonts at build time, so load them here. The splash
+  // overlay needs no fonts, so it plays over the wait — only the routes
+  // beneath it hold for the font load.
   const [fontsReady, fontError] = useFonts(fontAssets);
-  if (!fontsReady && !fontError) {
-    return null;
-  }
+  const dark = useColorScheme() === 'dark';
+  // revealed flips when the splash logo ends (content starts staggering in
+  // beneath the fade); splashDone flips when the fade completes (overlay unmounts).
+  const [revealed, setRevealed] = useState(false);
+  const [splashDone, setSplashDone] = useState(false);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <NavThemeProvider>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen
-            name="session"
-            options={{ presentation: 'fullScreenModal', headerShown: false }}
-          />
-        </Stack>
-        <StatusBar style="auto" />
-      </NavThemeProvider>
+      <IntroRevealProvider value={revealed}>
+        <NavThemeProvider>
+          {fontsReady || fontError ? (
+            <Stack>
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen
+                name="session"
+                options={{ presentation: 'fullScreenModal', headerShown: false }}
+              />
+            </Stack>
+          ) : null}
+          {/* The splash backdrop inverts the scheme (light mode plays on
+              black), so pin the status bar to stay legible until it's gone. */}
+          <StatusBar style={splashDone ? 'auto' : dark ? 'dark' : 'light'} />
+          {!splashDone ? (
+            <SplashOverlay
+              onReveal={() => setRevealed(true)}
+              onDone={() => setSplashDone(true)}
+            />
+          ) : null}
+        </NavThemeProvider>
+      </IntroRevealProvider>
     </GestureHandlerRootView>
   );
 }
