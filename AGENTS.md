@@ -2,6 +2,18 @@
 
 Read the exact versioned docs at https://docs.expo.dev/versions/v57.0.0/ before writing any code.
 
+# Typography: SF Pro Rounded
+
+All text uses SF Pro Rounded, bundled in `assets/fonts/` and loaded at runtime in `app/_layout.tsx` (Expo Go can't embed fonts at build time; the expo-font config plugin in `app.json` covers dev builds).
+
+Set weights via `fontFamily` with the constants from `constants/fonts.ts` (`fonts.regular` … `fonts.heavy`) — never via `fontWeight`, which makes iOS synthesize or fall back to the system font:
+
+```tsx
+import { fonts } from '@/constants/fonts';
+
+<Text style={{ fontFamily: fonts.semibold }}>…</Text>
+```
+
 # Icons: Hugeicons Pro
 
 This project uses Hugeicons Pro (docs: https://hugeicons.com/docs/integrations/react-native/pro). Two style packages are installed:
