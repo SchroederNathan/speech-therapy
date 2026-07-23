@@ -1,9 +1,8 @@
 import {
-  createContext,
   memo,
   useCallback,
-  useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
 } from 'react';
@@ -15,19 +14,14 @@ import {
   type NativeSyntheticEvent,
   type TextLayoutEventData,
 } from 'react-native';
+import Animated, {
+  interpolateColor,
+  type SharedValue,
+  useAnimatedStyle,
+} from 'react-native-reanimated';
 
 import { fonts } from '@/constants/fonts';
 import { sentenceAt, type TokenizedPassage } from '@/lib/passage-text';
-
-/**
- * The current word's 0..1 spoken fraction ticks at ~10Hz. It flows through a
- * dedicated context so ONLY the tiny PartialWord leaf re-renders on each tick
- * — the memoized Teleprompter (and its paragraph blocks) never see it.
- */
-export const WordFractionContext = createContext(0);
-
-/** Aa button presets for the reading text. */
-export const TELEPROMPTER_TEXT_SIZES = [28, 34, 40] as const;
 
 const LINE_HEIGHT_FACTOR = 1.32;
 /** The active line is auto-scrolled to sit at this fraction of the viewport. */
@@ -40,24 +34,32 @@ export type TeleprompterColors = {
   accentFaded: string;
 };
 
-/** Current word rendered as two spans split by the spoken fraction:
- * leading chars in full accent, the rest in the faded accent. */
-function PartialWord({
+/**
+ * The current word stays as one native text node. Reanimated blends its color
+ * directly on the UI runtime, so no React render or text reshaping happens on
+ * animation frames.
+ */
+function LiveWord({
   word,
   accent,
   accentFaded,
+  progress,
 }: {
   word: string;
   accent: string;
   accentFaded: string;
+  progress: SharedValue<number>;
 }) {
-  const fraction = useContext(WordFractionContext);
-  const split = Math.max(0, Math.min(word.length, Math.round(fraction * word.length)));
+  const animatedStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(
+      progress.value,
+      [0, 0.55, 1],
+      [accentFaded, accentFaded, accent],
+    ),
+  }));
+
   return (
-    <Text>
-      <Text style={{ color: accent }}>{word.slice(0, split)}</Text>
-      <Text style={{ color: accentFaded }}>{word.slice(split)}</Text>
-    </Text>
+    <Animated.Text style={animatedStyle}>{word}</Animated.Text>
   );
 }
 
@@ -99,6 +101,7 @@ type ActiveParagraphProps = {
   sentenceStart: number;
   sentenceEnd: number;
   colors: TeleprompterColors;
+  wordProgress: SharedValue<number>;
   fontSize: number;
   lineHeight: number;
   spacing: number;
@@ -116,6 +119,7 @@ const ActiveParagraph = memo(function ActiveParagraph({
   sentenceStart,
   sentenceEnd,
   colors,
+  wordProgress,
   fontSize,
   lineHeight,
   spacing,
@@ -146,7 +150,12 @@ const ActiveParagraph = memo(function ActiveParagraph({
       {completedText !== '' ? <Text style={{ color: colors.dimmed }}>{completedText + ' '}</Text> : null}
       {spokenText !== '' ? <Text style={{ color: colors.accent }}>{spokenText + ' '}</Text> : null}
       {currentWord != null ? (
-        <PartialWord word={currentWord} accent={colors.accent} accentFaded={colors.accentFaded} />
+        <LiveWord
+          word={currentWord}
+          accent={colors.accent}
+          accentFaded={colors.accentFaded}
+          progress={wordProgress}
+        />
       ) : null}
       {restText !== '' ? (currentWord != null ? ' ' + restText : restText) : null}
     </Text>
@@ -158,6 +167,7 @@ export type TeleprompterProps = {
   currentWordIndex: number;
   fontSize: number;
   colors: TeleprompterColors;
+  wordProgress: SharedValue<number>;
   /** Content padding above the first paragraph (below the header/fade). */
   topInset: number;
   /** Content padding below the last paragraph (so it can reach the anchor). */
@@ -169,6 +179,7 @@ export const Teleprompter = memo(function Teleprompter({
   currentWordIndex,
   fontSize,
   colors,
+  wordProgress,
   topInset,
   bottomInset,
 }: TeleprompterProps) {
@@ -228,7 +239,9 @@ export const Teleprompter = memo(function Teleprompter({
   }, [activeParagraphIndex, currentWordIndex, tokenized, lineHeight]);
 
   const scrollFnRef = useRef(scrollToCurrent);
-  scrollFnRef.current = scrollToCurrent;
+  useLayoutEffect(() => {
+    scrollFnRef.current = scrollToCurrent;
+  }, [scrollToCurrent]);
 
   useEffect(() => {
     scrollToCurrent();
@@ -272,13 +285,14 @@ export const Teleprompter = memo(function Teleprompter({
       {tokenized.paragraphs.map((p, i) =>
         i === activeParagraphIndex ? (
           <ActiveParagraph
-            key={i}
+            key={`${p.start}-${p.end}`}
             tokenized={tokenized}
             paragraphIndex={i}
             currentWordIndex={currentWordIndex}
             sentenceStart={sentence.start}
             sentenceEnd={sentence.end}
             colors={colors}
+            wordProgress={wordProgress}
             fontSize={fontSize}
             lineHeight={lineHeight}
             spacing={spacing}
@@ -287,7 +301,7 @@ export const Teleprompter = memo(function Teleprompter({
           />
         ) : (
           <StaticParagraph
-            key={i}
+            key={`${p.start}-${p.end}`}
             index={i}
             text={paragraphTexts[i]}
             color={i < activeParagraphIndex ? colors.dimmed : colors.foreground}

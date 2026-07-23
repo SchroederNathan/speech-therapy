@@ -1,15 +1,15 @@
 /**
- * Anchored incremental greedy alignment between live speech-recognition
- * transcripts and a tokenized passage.
+ * Anchored incremental, reference-aware alignment between live
+ * speech-recognition transcripts and a tokenized passage.
  *
  * Design (see plan):
  * - Final results commit an anchor (`anchorRef` into the reference words,
  *   `anchorTranscriptLen` into the transcript tokens). Every result event
  *   re-aligns all *pending* (post-anchor) tokens from the anchor, which
  *   absorbs interim retro-mutations for free.
- * - Forward search with SKIP_TOLERANCE: up to 4 reference words may be
- *   skipped to find a match. Skipped words are marked tentatively spoken
- *   ('skipped') — Azure judges them properly later.
+ * - A banded dynamic-programming pass absorbs substitutions, omissions,
+ *   insertions, repeated words, and small recognizer rewrites without losing
+ *   the passage frontier.
  * - Unmatched transcript tokens are insertion candidates; only insertions
  *   committed by a FINAL result feed the filler counter.
  * - The last matched token of an interim result is treated as "partial"
@@ -21,7 +21,13 @@
 
 import { normalizeToken, type TokenizedPassage } from '@/lib/passage-text';
 
+/** Kept as a public compatibility constant for the self-tests and callers. */
 export const SKIP_TOLERANCE = 4;
+
+const ALIGNMENT_LOOKAHEAD = 12;
+const INSERTION_COST = 0.92;
+const DELETION_COST = 0.78;
+const SUBSTITUTION_COST = 1.62;
 
 const WPM_WINDOW_MS = 15_000;
 /** No live WPM until this much active time has elapsed. */
@@ -109,6 +115,117 @@ export type CommittedInsertion = {
 
 type Token = { raw: string; norm: string; endMs: number | null };
 
+type MatchKind = 'exact' | 'fuzzy' | 'prefix';
+
+type AlignmentMatch = {
+  token: Token;
+  refIdx: number;
+  kind: MatchKind;
+};
+
+type AlignmentInsertion = {
+  token: Token;
+  afterRef: number;
+};
+
+type AlignmentResult = {
+  matches: AlignmentMatch[];
+  skippedRefs: number[];
+  insertionRuns: AlignmentInsertion[][];
+  refPos: number;
+  lastMatch: number | null;
+  provisionalRef: number | null;
+  fullMatchCount: number;
+  exactMatchCount: number;
+  partialFraction: number;
+  cost: number;
+};
+
+type DpStep =
+  | { kind: 'match'; matchKind: MatchKind }
+  | { kind: 'substitute' }
+  | { kind: 'insert' }
+  | { kind: 'delete' };
+
+type DpCell = {
+  cost: number;
+  previousI: number;
+  previousJ: number;
+  step: DpStep | null;
+};
+
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = new Array<number>(b.length + 1);
+    current[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length];
+}
+
+/**
+ * A compact phonetic key. It is intentionally conservative: it is only a
+ * fallback for recognizer spellings such as "nite"/"night", never the primary
+ * match signal.
+ */
+function phoneticKey(input: string): string {
+  const value = input
+    .replace(/^kn/, 'n')
+    .replace(/^wr/, 'r')
+    .replace(/^wh/, 'w')
+    .replace(/ph/g, 'f')
+    .replace(/ght/g, 't')
+    .replace(/ck/g, 'k')
+    .replace(/qu/g, 'k')
+    .replace(/[aeiouy]/g, '')
+    .replace(/(.)\1+/g, '$1');
+  return value.slice(0, 6);
+}
+
+function matchCost(
+  token: Token,
+  reference: string,
+  allowPrefix: boolean,
+): { cost: number; kind: MatchKind | null } {
+  if (token.norm === reference) return { cost: 0, kind: 'exact' };
+
+  if (
+    allowPrefix &&
+    token.norm.length >= 2 &&
+    reference.startsWith(token.norm)
+  ) {
+    return { cost: 0.12, kind: 'prefix' };
+  }
+
+  const distance = editDistance(token.norm, reference);
+  const ratio = distance / Math.max(token.norm.length, reference.length, 1);
+  if (ratio <= 0.34) {
+    return { cost: 0.42 + ratio, kind: 'fuzzy' };
+  }
+
+  if (
+    token.norm.length >= 3 &&
+    reference.length >= 3 &&
+    phoneticKey(token.norm) === phoneticKey(reference)
+  ) {
+    return { cost: 0.7, kind: 'fuzzy' };
+  }
+
+  return { cost: SUBSTITUTION_COST, kind: null };
+}
+
 /**
  * Split a transcript into normalized tokens. When recognizer segment timings
  * are provided, per-token end times are interpolated across each span.
@@ -149,8 +266,12 @@ type PendingAlignment = {
   refPos: number;
   /** Last matched matchable index (including a prefix-matched partial), or null. */
   lastMatch: number | null;
+  /** Reference word visually associated with the trailing interim token. */
+  provisionalRef: number | null;
   /** Full (non-prefix) matches only. */
   fullMatchCount: number;
+  /** Recognizer-observed 0..1 progress through the provisional word. */
+  partialFraction: number;
 };
 
 const EMPTY_PENDING: PendingAlignment = {
@@ -158,7 +279,9 @@ const EMPTY_PENDING: PendingAlignment = {
   skippedRefs: [],
   refPos: 0,
   lastMatch: null,
+  provisionalRef: null,
   fullMatchCount: 0,
+  partialFraction: 0,
 };
 
 export class PassageAligner {
@@ -213,11 +336,16 @@ export class PassageAligner {
    * result the last matched word counts as partial (frontier points at it).
    */
   get currentWordIndex(): number {
-    if (this.interim && this.pending.lastMatch != null) {
-      return this.refDisplay[this.pending.lastMatch];
+    if (this.interim && this.pending.provisionalRef != null) {
+      return this.refDisplay[this.pending.provisionalRef];
     }
     const frontier = Math.max(this.anchorRef, this.pending.refPos);
     return frontier < this.refDisplay.length ? this.refDisplay[frontier] : this.displayWordCount;
+  }
+
+  /** Recognizer-derived fraction for the current provisional word. */
+  get currentWordFraction(): number {
+    return this.interim ? this.pending.partialFraction : 0;
   }
 
   /** Called when a new recognition session begins (start/resume/auto-restart). */
@@ -227,6 +355,191 @@ export class PassageAligner {
     this.anchorNorms = [];
     this.pending = { ...EMPTY_PENDING, refPos: this.anchorRef };
     this.interim = false;
+  }
+
+  private alignPending(tokens: Token[], isFinal: boolean): AlignmentResult {
+    const pendingTokens = tokens.slice(this.anchorTranscriptLen);
+    const referenceEnd = Math.min(
+      this.refNorms.length,
+      this.anchorRef + pendingTokens.length + ALIGNMENT_LOOKAHEAD,
+    );
+    const references = this.refNorms.slice(this.anchorRef, referenceEnd);
+    const rows = pendingTokens.length + 1;
+    const columns = references.length + 1;
+    const dp: DpCell[][] = Array.from({ length: rows }, () =>
+      Array.from({ length: columns }, () => ({
+        cost: Number.POSITIVE_INFINITY,
+        previousI: -1,
+        previousJ: -1,
+        step: null,
+      })),
+    );
+    dp[0][0].cost = 0;
+
+    const update = (
+      i: number,
+      j: number,
+      cost: number,
+      previousI: number,
+      previousJ: number,
+      step: DpStep,
+    ) => {
+      if (cost < dp[i][j].cost - 1e-9) {
+        dp[i][j] = { cost, previousI, previousJ, step };
+      }
+    };
+
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < columns; j++) {
+        const cell = dp[i][j];
+        if (!Number.isFinite(cell.cost)) continue;
+
+        if (i < pendingTokens.length) {
+          update(i + 1, j, cell.cost + INSERTION_COST, i, j, { kind: 'insert' });
+        }
+        if (j < references.length) {
+          update(i, j + 1, cell.cost + DELETION_COST, i, j, { kind: 'delete' });
+        }
+        if (i < pendingTokens.length && j < references.length) {
+          const comparison = matchCost(
+            pendingTokens[i],
+            references[j],
+            !isFinal && i === pendingTokens.length - 1,
+          );
+          update(
+            i + 1,
+            j + 1,
+            cell.cost + comparison.cost,
+            i,
+            j,
+            comparison.kind
+              ? { kind: 'match', matchKind: comparison.kind }
+              : { kind: 'substitute' },
+          );
+        }
+      }
+    }
+
+    // Consume every transcript token, but never pay for trailing reference
+    // deletions that do not help explain the audio.
+    let endJ = 0;
+    for (let j = 1; j < columns; j++) {
+      if (dp[pendingTokens.length][j].cost < dp[pendingTokens.length][endJ].cost) {
+        endJ = j;
+      }
+    }
+
+    const steps: { step: DpStep; tokenIndex: number; refIndex: number }[] = [];
+    let i = pendingTokens.length;
+    let j = endJ;
+    while (i > 0 || j > 0) {
+      const cell = dp[i][j];
+      if (!cell.step) break;
+      steps.push({
+        step: cell.step,
+        tokenIndex: cell.previousI,
+        refIndex: cell.previousJ,
+      });
+      i = cell.previousI;
+      j = cell.previousJ;
+    }
+    steps.reverse();
+
+    const matches: AlignmentMatch[] = [];
+    const skippedRefs: number[] = [];
+    const insertionRuns: AlignmentInsertion[][] = [];
+    let currentInsertionRun: AlignmentInsertion[] | null = null;
+    let lastMatch: number | null = null;
+    let provisionalRef: number | null = null;
+    let partialFraction = 0;
+    let exactMatchCount = 0;
+
+    const addInsertion = (token: Token, afterRef: number) => {
+      if (!currentInsertionRun) {
+        currentInsertionRun = [];
+        insertionRuns.push(currentInsertionRun);
+      }
+      currentInsertionRun.push({ token, afterRef });
+    };
+
+    for (const entry of steps) {
+      const absoluteRef = this.anchorRef + entry.refIndex;
+      switch (entry.step.kind) {
+        case 'match': {
+          const token = pendingTokens[entry.tokenIndex];
+          const matchKind = entry.step.matchKind;
+          matches.push({ token, refIdx: absoluteRef, kind: matchKind });
+          lastMatch = absoluteRef;
+          provisionalRef = absoluteRef;
+          currentInsertionRun = null;
+          if (matchKind === 'exact') exactMatchCount++;
+          if (matchKind === 'prefix') {
+            partialFraction = Math.max(
+              0.15,
+              Math.min(0.92, token.norm.length / Math.max(this.refNorms[absoluteRef].length, 1)),
+            );
+          } else {
+            partialFraction = 0.82;
+          }
+          break;
+        }
+        case 'substitute': {
+          skippedRefs.push(absoluteRef);
+          provisionalRef = absoluteRef;
+          partialFraction = 0.58;
+          addInsertion(pendingTokens[entry.tokenIndex], lastMatch ?? this.lastCommittedMatch);
+          break;
+        }
+        case 'insert':
+          addInsertion(pendingTokens[entry.tokenIndex], lastMatch ?? this.lastCommittedMatch);
+          break;
+        case 'delete':
+          skippedRefs.push(absoluteRef);
+          currentInsertionRun = null;
+          break;
+      }
+    }
+
+    return {
+      matches,
+      skippedRefs,
+      insertionRuns,
+      refPos: this.anchorRef + endJ,
+      lastMatch,
+      provisionalRef,
+      fullMatchCount: matches.filter((match) => match.kind !== 'prefix').length,
+      exactMatchCount,
+      partialFraction,
+      cost: dp[pendingTokens.length][endJ].cost,
+    };
+  }
+
+  /**
+   * Score a recognizer alternative without changing alignment state. Higher is
+   * better. Exact reference progress dominates raw recognizer confidence.
+   */
+  scoreEvent(event: AlignerEvent, confidence = 0): number {
+    const tokens = tokenizeTranscript(event.transcript, event.segments);
+    const hasStablePrefix =
+      tokens.length >= this.anchorTranscriptLen &&
+      this.anchorNorms.every((norm, index) => tokens[index]?.norm === norm);
+    const candidateTokens = hasStablePrefix
+      ? tokens
+      : tokens.slice(0);
+    const originalAnchorLength = this.anchorTranscriptLen;
+    if (!hasStablePrefix) this.anchorTranscriptLen = 0;
+    const alignment = this.alignPending(candidateTokens, event.isFinal);
+    this.anchorTranscriptLen = originalAnchorLength;
+
+    const insertionCount = alignment.insertionRuns.reduce((sum, run) => sum + run.length, 0);
+    return (
+      alignment.exactMatchCount * 4 +
+      (alignment.fullMatchCount - alignment.exactMatchCount) * 2.1 -
+      alignment.skippedRefs.length * 0.7 -
+      insertionCount * 1.1 -
+      alignment.cost * 0.35 +
+      Math.max(0, confidence) * 0.25
+    );
   }
 
   handleEvent(event: AlignerEvent): void {
@@ -244,62 +557,11 @@ export class PassageAligner {
       this.anchorNorms = [];
     }
 
-    const pendingTokens = tokens.slice(this.anchorTranscriptLen);
-    let refPos = this.anchorRef;
-    let lastMatch: number | null = null;
-    let lastMatchWasPrefix = false;
-    const matched: { token: Token; refIdx: number; prefix: boolean }[] = [];
-    const skipped: number[] = [];
-    // Insertion runs: consecutive unmatched tokens (for bigram filler detection).
-    const insertionRuns: { token: Token; afterRef: number }[][] = [];
-    let currentRun: { token: Token; afterRef: number }[] | null = null;
-
-    pendingTokens.forEach((token, i) => {
-      const isLastInterim = !event.isFinal && i === pendingTokens.length - 1;
-      let found = -1;
-      let prefix = false;
-      for (let k = 0; k <= SKIP_TOLERANCE; k++) {
-        const idx = refPos + k;
-        if (idx >= this.refNorms.length) break;
-        if (this.refNorms[idx] === token.norm) {
-          found = idx;
-          break;
-        }
-      }
-      // The word currently being spoken may only be partially transcribed:
-      // accept a prefix match for the trailing interim token.
-      if (found < 0 && isLastInterim && token.norm.length >= 2) {
-        for (let k = 0; k <= SKIP_TOLERANCE; k++) {
-          const idx = refPos + k;
-          if (idx >= this.refNorms.length) break;
-          if (this.refNorms[idx].startsWith(token.norm)) {
-            found = idx;
-            prefix = true;
-            break;
-          }
-        }
-      }
-
-      if (found >= 0) {
-        for (let j = refPos; j < found; j++) skipped.push(j);
-        matched.push({ token, refIdx: found, prefix });
-        refPos = found + 1;
-        lastMatch = found;
-        lastMatchWasPrefix = prefix;
-        currentRun = null;
-      } else {
-        const afterRef = lastMatch ?? this.lastCommittedMatch;
-        if (!currentRun) {
-          currentRun = [];
-          insertionRuns.push(currentRun);
-        }
-        currentRun.push({ token, afterRef });
-      }
-    });
+    const alignment = this.alignPending(tokens, event.isFinal);
 
     if (event.isFinal) {
-      for (const m of matched) {
-        if (m.prefix) continue; // never commit a prefix guess
+      for (const m of alignment.matches) {
+        if (m.kind === 'prefix') continue; // never commit a prefix guess
         if (this.committed[m.refIdx] !== 'matched') {
           this.committed[m.refIdx] = 'matched';
           this.committedMatched++;
@@ -312,10 +574,10 @@ export class PassageAligner {
           atActiveMs: event.atActiveMs,
         };
       }
-      for (const s of skipped) {
+      for (const s of alignment.skippedRefs) {
         if (this.committed[s] === 'unspoken') this.committed[s] = 'skipped';
       }
-      for (const run of insertionRuns) {
+      for (const run of alignment.insertionRuns) {
         // Filler detection: greedy bigrams first, then unigrams.
         let i = 0;
         const fillerAt = new Array<boolean>(run.length).fill(false);
@@ -348,19 +610,24 @@ export class PassageAligner {
           });
         });
       }
-      this.anchorRef = refPos;
+      this.anchorRef = alignment.refPos;
       this.anchorTranscriptLen = tokens.length;
       this.anchorNorms = tokens.map((t) => t.norm);
-      if (lastMatch != null && !lastMatchWasPrefix) this.lastCommittedMatch = lastMatch;
-      this.pending = { ...EMPTY_PENDING, refPos };
+      if (alignment.lastMatch != null) this.lastCommittedMatch = alignment.lastMatch;
+      this.pending = { ...EMPTY_PENDING, refPos: alignment.refPos };
       this.interim = false;
     } else {
       this.pending = {
-        matchedRefs: matched.filter((m) => !m.prefix).map((m) => m.refIdx),
-        skippedRefs: skipped,
-        refPos,
-        lastMatch,
-        fullMatchCount: matched.filter((m) => !m.prefix).length,
+        matchedRefs: alignment.matches.reduce<number[]>((refs, match) => {
+          if (match.kind !== 'prefix') refs.push(match.refIdx);
+          return refs;
+        }, []),
+        skippedRefs: alignment.skippedRefs,
+        refPos: alignment.refPos,
+        lastMatch: alignment.lastMatch,
+        provisionalRef: alignment.provisionalRef,
+        fullMatchCount: alignment.fullMatchCount,
+        partialFraction: alignment.partialFraction,
       };
       this.interim = true;
     }

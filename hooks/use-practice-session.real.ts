@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSharedValue } from 'react-native-reanimated';
+import {
+  cancelAnimation,
+  Easing,
+  useSharedValue,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import { File, Paths } from 'expo-file-system';
 import {
   ExpoSpeechRecognitionModule,
@@ -9,6 +15,10 @@ import {
 import { tokenizePassage } from '@/lib/passage-text';
 import { PassageAligner } from '@/services/alignment';
 import { assessSession } from '@/services/azure-pronunciation';
+import {
+  buildContextualStrings,
+  selectBestHypothesis,
+} from '@/services/live-recognition';
 import { buildAzureResult, buildChunks, buildLiveFallbackResult } from '@/services/scoring';
 import { concatWavs, downsampleWaveform, sliceWav, wavDurationMs } from '@/services/wav';
 import type {
@@ -36,12 +46,14 @@ import type {
  *   listening auto-restart into a new segment, capped to avoid loops.
  */
 
-const TICK_MS = 100;
-const ELAPSED_EVERY_TICKS = 2; // ~200ms, contract says ~250ms
-const WPM_EVERY_TICKS = 10; // 1Hz
+const TICK_MS = 250;
+const WPM_EVERY_TICKS = 4; // 1Hz
 const MAX_CONSECUTIVE_AUTO_RESTARTS = 5;
 const AUDIO_END_TIMEOUT_MS = 3_000;
 const METER_HISTORY_CAP = 4_096;
+const VOICE_ON_DB = 0;
+const VOICE_OFF_DB = -0.8;
+const VOICE_HOLD_MS = 280;
 
 type RecognitionMode = 'on-device' | 'network';
 
@@ -66,13 +78,40 @@ type Machine = {
   accumulatedActiveMs: number;
   listeningSinceWall: number | null;
   frontierIndex: number;
-  frontierChangedWall: number;
+  speechActive: boolean;
+  lastVoiceWall: number;
   autoRestarts: number;
   lastTransientError: { code: string; message: string } | null;
   meterEma: number;
   meterHistory: number[];
   result: SessionResult | null;
 };
+
+function deleteSegmentFiles(m: Machine) {
+  for (const uri of m.segmentUris) {
+    if (!uri) continue;
+    try {
+      const file = new File(uri);
+      if (file.exists) file.delete();
+    } catch {
+      // best effort
+    }
+  }
+  m.segmentUris = [];
+}
+
+function waveformFromMeterHistory(history: number[]): number[] {
+  if (history.length === 0) return Array.from({ length: 30 }, () => 0.15);
+  const buckets = Array.from({ length: 30 }, (_, b) => {
+    const start = Math.floor((b * history.length) / 30);
+    const end = Math.max(start + 1, Math.floor(((b + 1) * history.length) / 30));
+    let sum = 0;
+    for (let i = start; i < end; i++) sum += history[i];
+    return sum / (end - start);
+  });
+  const peak = Math.max(...buckets, 1e-6);
+  return buckets.map((value) => Math.min(1, Math.max(0.08, value / peak)));
+}
 
 /** Only one engine may drive the native recognizer at a time. */
 let engineOwner: symbol | null = null;
@@ -90,11 +129,15 @@ export function usePracticeSession(passage: Passage): PracticeSession {
   const [liveWpm, setLiveWpm] = useState(0);
   const [fillerCount, setFillerCount] = useState(0);
   const [currentWordIndex, setCurrentWordIndex] = useState(0);
-  const [currentWordFraction, setCurrentWordFraction] = useState(0);
   const [result, setResult] = useState<SessionResult | null>(null);
   const meterLevel = useSharedValue(0);
+  const currentWordFraction = useSharedValue(0);
 
-  const instanceId = useRef(Symbol('practice-session')).current;
+  const instanceIdRef = useRef<symbol | null>(null);
+  if (instanceIdRef.current === null) {
+    instanceIdRef.current = Symbol('practice-session');
+  }
+  const instanceId = instanceIdRef.current;
   const mounted = useRef(true);
 
   const machineRef = useRef<Machine | null>(null);
@@ -116,7 +159,8 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       accumulatedActiveMs: 0,
       listeningSinceWall: null,
       frontierIndex: 0,
-      frontierChangedWall: Date.now(),
+      speechActive: false,
+      lastVoiceWall: 0,
       autoRestarts: 0,
       lastTransientError: null,
       meterEma: 0,
@@ -136,11 +180,78 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     if (mounted.current) setStatus(next);
   };
 
+  const currentWordDurationMs = (m: Machine) => {
+    const active = activeMs();
+    const live = m.aligner.getLiveWpm(active);
+    const wpm = Math.min(300, Math.max(60, live > 0 ? live : passage.targetWpm));
+    return 60_000 / wpm;
+  };
+
+  /**
+   * Continue the active-word treatment on the UI runtime. Recognition events
+   * supply anchors; this animation only fills the short interval between them.
+   */
+  const animateWordProgress = (
+    m: Machine,
+    observedFraction: number,
+    resetForNewWord = false,
+  ) => {
+    cancelAnimation(currentWordFraction);
+    const observed = Math.max(0, Math.min(0.94, observedFraction));
+    if (!m.speechActive) {
+      const observedAnimation = withTiming(observed, {
+        duration: 70,
+        easing: Easing.out(Easing.quad),
+      });
+      currentWordFraction.value = resetForNewWord
+        ? withSequence(withTiming(0, { duration: 0 }), observedAnimation)
+        : observedAnimation;
+      return;
+    }
+
+    const remainingMs = Math.max(90, currentWordDurationMs(m) * (1 - observed));
+    const catchUp = withTiming(observed, {
+      duration: 55,
+      easing: Easing.out(Easing.quad),
+    });
+    const coast = withTiming(0.94, {
+      duration: remainingMs,
+      easing: Easing.linear,
+    });
+    currentWordFraction.value = resetForNewWord
+      ? withSequence(withTiming(0, { duration: 0 }), catchUp, coast)
+      : withSequence(catchUp, coast);
+  };
+
+  const setSpeechActive = (m: Machine, active: boolean) => {
+    if (m.speechActive === active) return;
+    m.speechActive = active;
+    if (active) {
+      animateWordProgress(m, m.aligner.currentWordFraction);
+    } else {
+      cancelAnimation(currentWordFraction);
+    }
+  };
+
+  const flushLiveFrontier = (m: Machine) => {
+    const next = Math.max(0, Math.min(tokenized.words.length, m.aligner.currentWordIndex));
+    const changed = next !== m.frontierIndex;
+    if (changed) {
+      m.frontierIndex = next;
+      if (mounted.current) setCurrentWordIndex(next);
+    }
+    animateWordProgress(m, m.aligner.currentWordFraction, changed);
+  };
+
   const fail = (code: PracticeErrorCode, message: string) => {
     const m = machineRef.current!;
     if (m.status === 'done') return;
     m.expectEnd = true;
     m.listeningSinceWall = null;
+    m.speechActive = false;
+    cancelAnimation(currentWordFraction);
+    currentWordFraction.value = 0;
+    meterLevel.value = withTiming(0, { duration: 160 });
     try {
       ExpoSpeechRecognitionModule.abort();
     } catch {
@@ -162,6 +273,11 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       lang: 'en-US',
       interimResults: true,
       continuous: true,
+      maxAlternatives: 5,
+      contextualStrings: buildContextualStrings(
+        tokenized,
+        m.aligner.currentWordIndex,
+      ),
       requiresOnDeviceRecognition: mode === 'on-device',
       addsPunctuation: false,
       iosTaskHint: 'dictation',
@@ -176,19 +292,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     });
   };
 
-  const deleteSegmentFiles = (m: Machine) => {
-    for (const uri of m.segmentUris) {
-      if (!uri) continue;
-      try {
-        const file = new File(uri);
-        if (file.exists) file.delete();
-      } catch {
-        // best effort
-      }
-    }
-    m.segmentUris = [];
-  };
-
   const resetMachine = (m: Machine) => {
     m.aligner.reset();
     m.sessionId = makeSessionId();
@@ -201,7 +304,8 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     m.accumulatedActiveMs = 0;
     m.listeningSinceWall = null;
     m.frontierIndex = 0;
-    m.frontierChangedWall = Date.now();
+    m.speechActive = false;
+    m.lastVoiceWall = 0;
     m.autoRestarts = 0;
     m.lastTransientError = null;
     m.meterHistory = [];
@@ -211,10 +315,12 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       setLiveWpm(0);
       setFillerCount(0);
       setCurrentWordIndex(0);
-      setCurrentWordFraction(0);
       setResult(null);
       setError(null);
     }
+    cancelAnimation(currentWordFraction);
+    currentWordFraction.value = 0;
+    meterLevel.value = withTiming(0, { duration: 120 });
   };
 
   // ---- native events ------------------------------------------------------
@@ -222,16 +328,40 @@ export function usePracticeSession(passage: Passage): PracticeSession {
   useSpeechRecognitionEvent('result', (event) => {
     const m = machineRef.current!;
     if (m.status !== 'listening' && m.status !== 'processing' && m.status !== 'paused') return;
-    const first = event.results?.[0];
-    if (!first) return;
+    const atActiveMs = activeMs();
+    const best = selectBestHypothesis(
+      (event.results ?? []).map((candidate) => ({
+        transcript: candidate.transcript ?? '',
+        confidence: candidate.confidence,
+        segments: candidate.segments,
+      })),
+      m.aligner,
+      event.isFinal,
+      atActiveMs,
+    );
+    if (!best) return;
     m.autoRestarts = 0; // real progress — reset the restart budget
     m.lastTransientError = null;
     m.aligner.handleEvent({
-      transcript: first.transcript ?? '',
+      transcript: best.transcript,
       isFinal: event.isFinal,
-      atActiveMs: activeMs(),
-      segments: first.segments,
+      atActiveMs,
+      segments: best.segments,
     });
+    flushLiveFrontier(m);
+  });
+
+  useSpeechRecognitionEvent('speechstart', () => {
+    const m = machineRef.current!;
+    if (m.status !== 'listening') return;
+    m.lastVoiceWall = Date.now();
+    setSpeechActive(m, true);
+  });
+
+  useSpeechRecognitionEvent('speechend', () => {
+    const m = machineRef.current!;
+    if (m.status !== 'listening') return;
+    setSpeechActive(m, false);
   });
 
   useSpeechRecognitionEvent('volumechange', (event) => {
@@ -241,6 +371,16 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     m.meterEma = m.meterEma * 0.6 + level * 0.4;
     meterLevel.value = m.meterEma;
     if (m.meterHistory.length < METER_HISTORY_CAP) m.meterHistory.push(m.meterEma);
+    const now = Date.now();
+    if (event.value >= VOICE_ON_DB) {
+      m.lastVoiceWall = now;
+      setSpeechActive(m, true);
+    } else if (
+      event.value <= VOICE_OFF_DB &&
+      now - m.lastVoiceWall >= VOICE_HOLD_MS
+    ) {
+      setSpeechActive(m, false);
+    }
   });
 
   useSpeechRecognitionEvent('audiostart', (event) => {
@@ -317,7 +457,7 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     startRecognition(m.mode);
   });
 
-  // ---- tick loop (throttled state flushes, ~10Hz) --------------------------
+  // ---- low-frequency metrics loop (animation is event/UI-runtime driven) ---
 
   useEffect(() => {
     let tick = 0;
@@ -325,26 +465,10 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       const m = machineRef.current!;
       tick += 1;
       if (m.status !== 'listening') {
-        meterLevel.value = Math.max(0, meterLevel.value * 0.85 - 0.004);
         return;
       }
-      const now = Date.now();
       const active = activeMs();
-
-      if (tick % ELAPSED_EVERY_TICKS === 0) setElapsedMs(active);
-
-      const frontier = m.aligner.currentWordIndex;
-      if (frontier !== m.frontierIndex) {
-        m.frontierIndex = frontier;
-        m.frontierChangedWall = now;
-        setCurrentWordIndex(frontier);
-        setCurrentWordFraction(0);
-      } else {
-        const wpmNow = m.aligner.getLiveWpm(active);
-        const wordsPerMinute = Math.min(300, Math.max(60, wpmNow > 0 ? wpmNow : passage.targetWpm));
-        const wordMs = 60_000 / wordsPerMinute;
-        setCurrentWordFraction(Math.min(0.95, (now - m.frontierChangedWall) / wordMs));
-      }
+      setElapsedMs(active);
 
       if (tick % WPM_EVERY_TICKS === 0) {
         m.aligner.recordWpmSample(active);
@@ -353,8 +477,8 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       }
     }, TICK_MS);
     return () => clearInterval(interval);
-    // meterLevel is a stable shared value; targetWpm gates the fraction pace.
-  }, [meterLevel, passage.targetWpm]);
+    // Shared values and passage identity are stable for this screen.
+  }, [meterLevel, passage.targetWpm, currentWordFraction]);
 
   // ---- unmount cleanup ------------------------------------------------------
 
@@ -366,6 +490,10 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       if (engineOwner === instanceId) engineOwner = null;
       if (m.status === 'listening' || m.status === 'paused') {
         m.expectEnd = true;
+        m.speechActive = false;
+        cancelAnimation(currentWordFraction);
+        currentWordFraction.value = 0;
+        meterLevel.value = withTiming(0, { duration: 120 });
         try {
           ExpoSpeechRecognitionModule.abort();
         } catch {
@@ -374,7 +502,7 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         deleteSegmentFiles(m);
       }
     };
-  }, [instanceId]);
+  }, [instanceId, currentWordFraction, meterLevel]);
 
   // ---- processing (stop) ----------------------------------------------------
 
@@ -385,19 +513,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       if (m.audioPending.length === 0 && m.endedCount >= m.startedCount) return;
       await new Promise((r) => setTimeout(r, 100));
     }
-  };
-
-  const waveformFromMeterHistory = (history: number[]): number[] => {
-    if (history.length === 0) return Array.from({ length: 30 }, () => 0.15);
-    const buckets = Array.from({ length: 30 }, (_, b) => {
-      const start = Math.floor((b * history.length) / 30);
-      const end = Math.max(start + 1, Math.floor(((b + 1) * history.length) / 30));
-      let sum = 0;
-      for (let i = start; i < end; i++) sum += history[i];
-      return sum / (end - start);
-    });
-    const peak = Math.max(...buckets, 1e-6);
-    return buckets.map((v) => Math.min(1, Math.max(0.08, v / peak)));
   };
 
   const finishProcessing = async (): Promise<SessionResult> => {
@@ -416,7 +531,7 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     const segmentDurations: number[] = [];
 
     try {
-      for (const uri of m.segmentUris) {
+      const loadedSegments = await Promise.all(m.segmentUris.map(async (uri) => {
         let bytes: Uint8Array | null = null;
         if (uri) {
           try {
@@ -426,16 +541,19 @@ export function usePracticeSession(passage: Passage): PracticeSession {
             bytes = null;
           }
         }
-        segmentBytes.push(bytes);
         let duration = 0;
         if (bytes) {
           try {
             duration = wavDurationMs(bytes);
           } catch {
-            segmentBytes[segmentBytes.length - 1] = null;
+            bytes = null;
           }
         }
-        segmentDurations.push(duration);
+        return { bytes, duration };
+      }));
+      for (const segment of loadedSegments) {
+        segmentBytes.push(segment.bytes);
+        segmentDurations.push(segment.duration);
       }
 
       const playable = segmentBytes.filter((b): b is Uint8Array => b != null);
@@ -552,6 +670,8 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         const m = machineRef.current!;
         if (m.status !== 'listening') return;
         m.expectEnd = true;
+        setSpeechActive(m, false);
+        meterLevel.value = withTiming(0, { duration: 160 });
         accumulate();
         setStatusSafe('paused');
         try {
@@ -565,6 +685,7 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         const m = machineRef.current!;
         if (m.status !== 'paused') return;
         m.listeningSinceWall = Date.now();
+        m.speechActive = false;
         setStatusSafe('listening');
         startRecognition(m.mode);
       },
@@ -593,6 +714,9 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       cancel() {
         const m = machineRef.current!;
         m.expectEnd = true;
+        setSpeechActive(m, false);
+        currentWordFraction.value = 0;
+        meterLevel.value = withTiming(0, { duration: 120 });
         accumulate();
         try {
           ExpoSpeechRecognitionModule.abort();
@@ -609,6 +733,8 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         if (m.status === 'done' && m.result) return m.result;
         m.expectEnd = true;
         m.stopping = true;
+        setSpeechActive(m, false);
+        meterLevel.value = withTiming(0, { duration: 160 });
         accumulate();
         setStatusSafe('processing');
         try {

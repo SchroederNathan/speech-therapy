@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSharedValue } from 'react-native-reanimated';
+import {
+  cancelAnimation,
+  Easing,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { tokenizePassage } from '@/lib/passage-text';
 import type {
@@ -61,9 +66,9 @@ export function usePracticeSession(passage: Passage): PracticeSession {
   const [liveWpm, setLiveWpm] = useState(0);
   const [fillerCount, setFillerCount] = useState(0);
   const [currentWordIndex, setCurrentWordIndex] = useState(0);
-  const [currentWordFraction, setCurrentWordFraction] = useState(0);
   const [result, setResult] = useState<SessionResult | null>(null);
   const meterLevel = useSharedValue(0);
+  const currentWordFraction = useSharedValue(0);
 
   const stateRef = useRef({
     status: 'idle' as PracticeStatus,
@@ -108,7 +113,10 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       meterLevel.value = 0.15 + 0.6 * Math.abs(Math.sin(t * 7) * Math.sin(t * 1.3));
 
       setElapsedMs(s.elapsedMs);
-      setCurrentWordFraction(s.fraction);
+      currentWordFraction.value = withTiming(s.fraction, {
+        duration: TICK_MS,
+        easing: Easing.linear,
+      });
       if (advanced) setCurrentWordIndex(s.wordIndex);
       if (s.elapsedMs % 1000 < TICK_MS) {
         const minutes = s.elapsedMs / 60000;
@@ -125,7 +133,7 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     }, TICK_MS);
     return () => clearInterval(interval);
     // meterLevel is a stable shared value; tokenized/passage identity gate the sim.
-  }, [tokenized, passage.targetWpm, meterLevel]);
+  }, [tokenized, passage.targetWpm, meterLevel, currentWordFraction]);
 
   const api = useMemo(() => {
     const reset = () => {
@@ -138,7 +146,8 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       setLiveWpm(0);
       setFillerCount(0);
       setCurrentWordIndex(0);
-      setCurrentWordFraction(0);
+      cancelAnimation(currentWordFraction);
+      currentWordFraction.value = 0;
       setResult(null);
     };
 
@@ -170,7 +179,7 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         return mockResult;
       },
     };
-  }, [passage]);
+  }, [passage, currentWordFraction]);
 
   return {
     status,

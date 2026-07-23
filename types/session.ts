@@ -78,8 +78,8 @@ export type PracticeSession = {
   words: string[];
   /** Frontier: index of the first word not yet fully spoken. */
   currentWordIndex: number;
-  /** 0..1 progress through the current word. High-frequency (~10Hz); consume only in a small leaf component. */
-  currentWordFraction: number;
+  /** 0..1 progress through the current word, animated on the UI runtime. */
+  currentWordFraction: SharedValue<number>;
   /** 0..1 smoothed mic level, written on the UI-thread-safe path for the waveform. */
   meterLevel: SharedValue<number>;
   /** Populated when status === 'done' (same value stop() resolves with). */

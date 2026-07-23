@@ -9,13 +9,14 @@ import { PracticeControls } from '@/components/session/practice-controls';
 import { SessionTopBar } from '@/components/session/session-top-bar';
 import {
   Teleprompter,
-  TELEPROMPTER_TEXT_SIZES,
-  WordFractionContext,
   type TeleprompterColors,
 } from '@/components/session/teleprompter';
 import { palette } from '@/constants/colors';
 import { getPassage, PASSAGES } from '@/constants/passages';
-import { sessionColors } from '@/constants/session-theme';
+import {
+  sessionColors,
+  TELEPROMPTER_TEXT_SIZES,
+} from '@/constants/session-theme';
 import { usePracticeSession } from '@/hooks/use-practice-session';
 import { tokenizePassage } from '@/lib/passage-text';
 
@@ -52,8 +53,11 @@ export default function PracticeScreen() {
   // The session object is rebuilt every render (live fields); keep a ref so
   // stable effects/callbacks always act on the latest instance.
   const sessionRef = useRef(session);
-  sessionRef.current = session;
   const navigatedRef = useRef(false);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
 
   useEffect(() => {
     if (!found) router.back();
@@ -145,18 +149,15 @@ export default function PracticeScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: screenPalette.background }]}>
-      {/* Fraction flows through context so the 10Hz tick only re-renders the
-          PartialWord leaf inside the memoized teleprompter. */}
-      <WordFractionContext.Provider value={session.currentWordFraction}>
-        <Teleprompter
-          tokenized={tokenized}
-          currentWordIndex={session.currentWordIndex}
-          fontSize={fontSize}
-          colors={teleColors}
-          topInset={contentTop}
-          bottomInset={windowHeight * 0.55}
-        />
-      </WordFractionContext.Provider>
+      <Teleprompter
+        tokenized={tokenized}
+        currentWordIndex={session.currentWordIndex}
+        wordProgress={session.currentWordFraction}
+        fontSize={fontSize}
+        colors={teleColors}
+        topInset={contentTop}
+        bottomInset={windowHeight * 0.55}
+      />
 
       <SessionTopBar onDismiss={handleDismiss} onTextSize={handleTextSize}>
         <LiveWpm liveWpm={session.liveWpm} targetWpm={passage.targetWpm} />

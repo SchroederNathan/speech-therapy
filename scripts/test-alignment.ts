@@ -10,6 +10,10 @@ import {
   tokenizeTranscript,
   type AlignerEvent,
 } from '@/services/alignment';
+import {
+  buildContextualStrings,
+  selectBestHypothesis,
+} from '@/services/live-recognition';
 
 let passed = 0;
 let failed = 0;
@@ -179,8 +183,56 @@ section('prefix partial match on trailing interim token');
   a.handleEvent(ev('the wonde', false, 500));
   assertEq(a.currentWordIndex, 1, 'prefix match points frontier at the in-progress word');
   assertEq(a.matchedCount, 1, 'prefix guess not counted as a full match');
+  assert(
+    a.currentWordFraction > 0.2 && a.currentWordFraction < 0.9,
+    'prefix exposes recognizer-derived word progress',
+  );
   a.handleEvent(ev('the wonderful', false, 800));
   assertEq(a.matchedCount, 2, 'full match once complete');
+}
+
+// ---------------------------------------------------------------------------
+section('fuzzy substitution recovery');
+{
+  const tokenized = tokenizePassage('A bright light shines through the quiet night.');
+  const a = new PassageAligner(tokenized);
+  a.beginSegment(0);
+
+  a.handleEvent(ev('a brite lite shines through the quiet nite', false, 1800));
+  assertEq(a.currentWordIndex, 7, 'phonetic/edit-distance variants keep the live frontier');
+  assert(a.matchedCount >= 7, 'fuzzy variants count as provisional passage matches');
+}
+
+// ---------------------------------------------------------------------------
+section('reference-aware hypothesis reranking');
+{
+  const tokenized = tokenizePassage('The quick brown fox jumps over the fence.');
+  const a = new PassageAligner(tokenized);
+  a.beginSegment(0);
+
+  const best = selectBestHypothesis(
+    [
+      { transcript: 'the slick round box', confidence: 0.91 },
+      { transcript: 'the quick brown fox', confidence: 0.35 },
+    ],
+    a,
+    false,
+    1000,
+  );
+  assertEq(best?.transcript, 'the quick brown fox', 'passage fit beats generic ASR confidence');
+}
+
+// ---------------------------------------------------------------------------
+section('contextual string construction');
+{
+  const tokenized = tokenizePassage(
+    'Praggnanandhaa studies an unusual zugzwang before the championship match.',
+  );
+  const context = buildContextualStrings(tokenized, 0, 100);
+  assert(context.includes('praggnanandhaa'), 'includes unusual passage vocabulary');
+  assert(context.includes('unusual zugzwang'), 'includes short passage bigrams');
+  assert(new Set(context).size === context.length, 'deduplicates recognizer context');
+  assert(context.length <= 100, 'respects native contextual phrase limit');
 }
 
 // ---------------------------------------------------------------------------

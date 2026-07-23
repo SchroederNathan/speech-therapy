@@ -31,3 +31,6 @@ export const sessionColors = {
 } as const;
 
 export type SessionColors = (typeof sessionColors)['light'];
+
+/** Aa button presets for the live reading text. */
+export const TELEPROMPTER_TEXT_SIZES = [28, 34, 40] as const;
