@@ -1,15 +1,8 @@
-import { Host, Text as SwiftUIText } from '@expo/ui/swift-ui';
-import {
-  animation,
-  Animation,
-  contentTransition,
-  font,
-  foregroundStyle,
-} from '@expo/ui/swift-ui/modifiers';
 import { useEffect, useState } from 'react';
-import { Platform, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { Easing, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 
+import { AnimatedRoundedNumber } from '@/components/animated-rounded-number';
 import { palette } from '@/constants/colors';
 import { fonts } from '@/constants/fonts';
 import { scoreLabel } from '@/lib/metrics';
@@ -75,24 +68,18 @@ export function ScoreGauge({ score }: ScoreGaugeProps) {
       fill={foreground}
       track={TRACK[scheme]}
       style={styles.gauge}>
-      {Platform.OS === 'ios' ? (
-        // Fixed-height box: SwiftUI Hosts don't self-size reliably in flex.
-        <View style={styles.scoreBox}>
-          <Host matchContents>
-            <SwiftUIText
-              modifiers={[
-                contentTransition('numericText'),
-                animation(Animation.spring({ duration: 0.9 }), displayScore),
-                font({ size: 54, weight: 'bold', design: 'rounded' }),
-                foregroundStyle(foreground),
-              ]}>
-              {`${displayScore}%`}
-            </SwiftUIText>
-          </Host>
-        </View>
-      ) : (
-        <Text style={[styles.scoreFallback, { color: foreground }]}>{`${clamped}%`}</Text>
-      )}
+      {/* Fixed-height box: SwiftUI Hosts don't self-size reliably in flex. */}
+      <View style={styles.scoreBox}>
+        <AnimatedRoundedNumber
+          text={`${displayScore}%`}
+          value={displayScore}
+          color={foreground}
+          fontSize={54}
+          fontFamily={fonts.bold}
+          weight="bold"
+          duration={0.9}
+        />
+      </View>
       <Text style={[styles.label, { color: secondary }]}>{scoreLabel(clamped)}</Text>
     </TickGauge>
   );
@@ -105,10 +92,6 @@ const styles = StyleSheet.create({
   scoreBox: {
     height: 64,
     justifyContent: 'center',
-  },
-  scoreFallback: {
-    fontSize: 54,
-    fontFamily: fonts.bold,
   },
   label: {
     fontSize: 17,

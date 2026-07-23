@@ -4,6 +4,7 @@ import { useCallback, useEffect } from 'react';
 import { ScrollView, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AiCoachingCard } from '@/components/session/ai-coaching-card';
 import { MetricGrid } from '@/components/session/metric-grid';
 import { PlaybackPill } from '@/components/session/playback-pill';
 import { ResultsFooter } from '@/components/session/results-footer';
@@ -69,6 +70,9 @@ export default function ResultsScreen() {
         <View style={styles.metrics}>
           <MetricGrid result={result} />
         </View>
+        <View style={styles.coaching}>
+          <AiCoachingCard result={result} />
+        </View>
         <View style={styles.breakdown}>
           <WordBreakdown words={result.words} />
         </View>
@@ -98,6 +102,9 @@ const styles = StyleSheet.create({
   },
   metrics: {
     marginTop: 12,
+  },
+  coaching: {
+    marginTop: 28,
   },
   breakdown: {
     marginTop: 28,

@@ -1,11 +1,3 @@
-import { Host, Text as SwiftUIText } from '@expo/ui/swift-ui';
-import {
-  animation,
-  Animation,
-  contentTransition,
-  font,
-  foregroundStyle,
-} from '@expo/ui/swift-ui/modifiers';
 import { Mic02Icon } from '@hugeicons-pro/core-solid-rounded';
 import { HugeiconsIcon } from '@hugeicons/react-native';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
@@ -24,6 +16,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Line } from 'react-native-svg';
 
+import { AnimatedRoundedNumber } from '@/components/animated-rounded-number';
 import { palette } from '@/constants/colors';
 import { fonts } from '@/constants/fonts';
 
@@ -173,19 +166,15 @@ export function DailyGoalCard({ percent, onStartPractice }: DailyGoalCardProps) 
         </Svg>
         <View style={styles.gaugeCenter} pointerEvents="none">
           <Text style={[styles.caption, { color: theme.secondary }]}>Daily Goal</Text>
-          <Host matchContents>
-            <SwiftUIText
-              modifiers={[
-                contentTransition('numericText'),
-                animation(Animation.spring({ duration: 0.6 }), clamped),
-                // SwiftUI can't use the runtime-loaded OTFs; design:'rounded'
-                // resolves to the same SF Pro Rounded face natively.
-                font({ size: 38, weight: 'bold', design: 'rounded' }),
-                foregroundStyle(colors.foreground),
-              ]}>
-              {`${clamped}%`}
-            </SwiftUIText>
-          </Host>
+          <AnimatedRoundedNumber
+            text={`${clamped}%`}
+            value={clamped}
+            color={colors.foreground}
+            fontSize={38}
+            fontFamily={fonts.bold}
+            weight="bold"
+            duration={0.6}
+          />
         </View>
       </View>
 

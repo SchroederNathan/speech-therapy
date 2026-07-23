@@ -1,13 +1,6 @@
-import { Host, Text as SwiftUIText } from '@expo/ui/swift-ui';
-import {
-  animation,
-  Animation,
-  contentTransition,
-  font,
-  foregroundStyle,
-} from '@expo/ui/swift-ui/modifiers';
-import { Platform, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { StyleSheet, Text, useColorScheme, View } from 'react-native';
 
+import { AnimatedRoundedNumber } from '@/components/animated-rounded-number';
 import { fonts } from '@/constants/fonts';
 import { paceLabel } from '@/lib/metrics';
 import { sessionColors } from '@/constants/session-theme';
@@ -30,27 +23,18 @@ export function LiveWpm({ liveWpm, targetWpm }: LiveWpmProps) {
 
   return (
     <View style={styles.wrap}>
-      {Platform.OS === 'ios' ? (
-        // Fixed-height container: SwiftUI Hosts don't reliably self-size in
-        // flex rows (same finding as DailyGoalCard).
-        <View style={styles.wpmBox}>
-          <Host matchContents>
-            <SwiftUIText
-              modifiers={[
-                contentTransition('numericText'),
-                animation(Animation.spring({ duration: 0.5 }), liveWpm),
-                // SwiftUI can't use the runtime-loaded OTFs; design:'rounded'
-                // resolves to the same SF Pro Rounded face natively.
-                font({ size: 20, weight: 'semibold', design: 'rounded' }),
-                foregroundStyle(accent),
-              ]}>
-              {wpmText}
-            </SwiftUIText>
-          </Host>
-        </View>
-      ) : (
-        <Text style={[styles.wpmFallback, { color: accent }]}>{wpmText}</Text>
-      )}
+      {/* Fixed-height container: SwiftUI Hosts don't reliably self-size in flex rows. */}
+      <View style={styles.wpmBox}>
+        <AnimatedRoundedNumber
+          text={wpmText}
+          value={liveWpm}
+          color={accent}
+          fontSize={20}
+          fontFamily={fonts.semibold}
+          weight="semibold"
+          duration={0.5}
+        />
+      </View>
       <Text style={[styles.caption, { color: secondary }]}>
         {`target ${targetWpm} · ${paceLabel(liveWpm, targetWpm)}`}
       </Text>
@@ -66,10 +50,6 @@ const styles = StyleSheet.create({
   wpmBox: {
     height: 25,
     justifyContent: 'center',
-  },
-  wpmFallback: {
-    fontSize: 20,
-    fontFamily: fonts.semibold,
   },
   caption: {
     fontSize: 13,

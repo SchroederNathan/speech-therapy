@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "speech-companion",
-    "slug": "speech-companion",
-    "scheme": "speech-companion",
+    "name": "Cadence",
+    "slug": "cadence",
+    "scheme": "cadence",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -14,7 +14,7 @@
         "NSSpeechRecognitionUsageDescription": "Allow $(PRODUCT_NAME) to use speech recognition to follow along as you read.",
         "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to access your microphone so it can hear you read."
       },
-      "bundleIdentifier": "com.exponathan.speech-companion"
+      "bundleIdentifier": "com.exponathan.cadence"
     },
     "android": {
       "adaptiveIcon": {
@@ -32,7 +32,8 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "output": "server"
     },
     "plugins": [
       "expo-router",
@@ -60,6 +61,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "654f9e52-e892-44e4-a4b8-9aa700fef15b"
+      }
+    },
+    "owner": "exponathan"
   }
 }
