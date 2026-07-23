@@ -1,7 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import {
+  setAudioModeAsync,
+  useAudioPlayer,
+  useAudioPlayerStatus,
+} from 'expo-audio';
 
 import type { ResultPlayback } from '@/types/session';
+
+const RESULT_PLAYBACK_AUDIO_MODE = {
+  allowsRecording: false,
+  playsInSilentMode: true,
+  shouldRouteThroughEarpiece: false,
+} as const;
+
+async function routeAudioToSpeaker() {
+  try {
+    await setAudioModeAsync(RESULT_PLAYBACK_AUDIO_MODE);
+  } catch (error) {
+    if (__DEV__) {
+      console.warn('[results] Could not configure audio playback routing:', error);
+    }
+  }
+}
 
 /**
  * Playback for the results screen's audio pill.
@@ -19,6 +39,14 @@ export function useResultPlayback(audioUri: string | null, durationMs: number): 
   const [simPlaying, setSimPlaying] = useState(false);
   const [simPositionMs, setSimPositionMs] = useState(0);
   const simPositionRef = useRef(0);
+
+  // Speech recognition uses iOS's play-and-record category. Restore the
+  // standard playback category so the recording comes from the main speaker,
+  // not the receiver used for calls. Re-assert this in toggle() in case another
+  // native module changes the shared audio session after this effect runs.
+  useEffect(() => {
+    if (audioUri) void routeAudioToSpeaker();
+  }, [audioUri]);
 
   useEffect(() => {
     if (audioUri || !simPlaying) return;
@@ -46,7 +74,7 @@ export function useResultPlayback(audioUri: string | null, durationMs: number): 
     return {
       isPlaying: playerStatus.playing,
       positionMs: Math.round(playerStatus.currentTime * 1000),
-      toggle() {
+      async toggle() {
         if (playerStatus.playing) {
           player.pause();
           return;
@@ -55,6 +83,7 @@ export function useResultPlayback(audioUri: string | null, durationMs: number): 
         if (durationSec > 0 && playerStatus.currentTime >= durationSec - 0.05) {
           player.seekTo(0).catch(() => {});
         }
+        await routeAudioToSpeaker();
         player.play();
       },
     };
