@@ -12,7 +12,9 @@
       "icon": "./assets/app.icon",
       "infoPlist": {
         "NSSpeechRecognitionUsageDescription": "Allow $(PRODUCT_NAME) to use speech recognition to follow along as you read.",
-        "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to access your microphone so it can hear you read."
+        "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to access your microphone so it can hear you read.",
+        "NSPhotoLibraryUsageDescription": "$(PRODUCT_NAME) does not access your photos. This permission is referenced by a system framework used for file handling, and your photo library is never read without your consent.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.exponathan.cadence"
     },
