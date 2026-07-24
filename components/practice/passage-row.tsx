@@ -4,6 +4,7 @@ import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import * as Haptics from 'expo-haptics';
 import { Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 
+import { AnimatedDashedBorder } from '@/components/animated-dashed-border';
 import { fonts } from '@/constants/fonts';
 import { SKILL_LABELS } from '@/constants/skills';
 import type { Passage } from '@/types/session';
@@ -118,17 +119,30 @@ export function AddPassageRow({ onPress }: { onPress: () => void }) {
 
   return (
     <Pressable onPress={handlePress} style={({ pressed }) => pressed && { opacity: 0.7 }}>
-      <View style={[styles.row, styles.addRow, { borderColor: theme.dashed }]}>
-        <View style={[styles.thumb, styles.addThumb, { borderColor: theme.dashed }]}>
-          <HugeiconsIcon icon={PlusSignIcon} size={22} color={theme.secondary} strokeWidth={1.5} />
+      <AnimatedDashedBorder
+        style={styles.addBorder}
+        borderRadius={26}
+        strokeColor={theme.dashed}
+        strokeWidth={1.5}
+        dashLength={5}
+        gapLength={5}>
+        <View style={styles.addRow}>
+          <View style={[styles.thumb, styles.addThumb, { borderColor: theme.dashed }]}>
+            <HugeiconsIcon
+              icon={PlusSignIcon}
+              size={22}
+              color={theme.secondary}
+              strokeWidth={1.5}
+            />
+          </View>
+          <View style={styles.textCol}>
+            <Text style={[styles.title, { color: theme.foreground }]}>Add your own</Text>
+            <Text style={[styles.meta, { color: theme.secondary }]}>
+              Paste any text, speech, or transcript
+            </Text>
+          </View>
         </View>
-        <View style={styles.textCol}>
-          <Text style={[styles.title, { color: theme.foreground }]}>Add your own</Text>
-          <Text style={[styles.meta, { color: theme.secondary }]}>
-            Paste any text, speech, or transcript
-          </Text>
-        </View>
-      </View>
+      </AnimatedDashedBorder>
     </Pressable>
   );
 }
@@ -143,9 +157,14 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     marginTop: 12,
   },
+  addBorder: {
+    marginTop: 12,
+  },
   addRow: {
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 12,
   },
   thumb: {
     width: THUMB_SIZE,
