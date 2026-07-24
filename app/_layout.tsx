@@ -69,9 +69,19 @@ export default function RootLayout() {
                 name="session"
                 options={{ presentation: 'fullScreenModal', headerShown: false }}
               />
+              {/* Keeps its native header: a custom left-placed title and the
+                  close button live in the stack toolbar (Stack.Toolbar inside
+                  the route). Transparent, blur-free bar so the screen
+                  background shows through. */}
               <Stack.Screen
                 name="passage-editor"
-                options={{ presentation: 'modal', headerShown: false }}
+                options={{
+                  presentation: 'modal',
+                  title: '',
+                  headerTransparent: true,
+                  headerShadowVisible: false,
+                  headerBlurEffect: 'none',
+                }}
               />
             </Stack>
           ) : null}

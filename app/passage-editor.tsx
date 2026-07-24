@@ -1,12 +1,7 @@
-import { Cancel01Icon } from '@hugeicons-pro/core-stroke-rounded';
-import { HugeiconsIcon } from '@hugeicons/react-native';
-import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import * as Haptics from 'expo-haptics';
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,6 +11,7 @@ import {
   View,
 } from 'react-native';
 
+import { PacePicker } from '@/components/pace-picker';
 import { palette } from '@/constants/colors';
 import { fonts } from '@/constants/fonts';
 import { tokenizePassage } from '@/lib/passage-text';
@@ -33,33 +29,25 @@ const THEME = {
   light: {
     secondary: '#77777E',
     inputBed: 'rgba(17,17,20,0.06)',
-    segmentBed: 'rgba(17,17,20,0.06)',
-    segmentActive: '#1C1C21',
-    segmentActiveLabel: '#FFFFFF',
     buttonSolid: '#1C1C21',
     buttonLabel: '#FFFFFF',
     buttonDisabled: 'rgba(17,17,20,0.25)',
-    closeBed: 'rgba(17,17,20,0.08)',
   },
   dark: {
     secondary: '#9E9EA6',
     inputBed: 'rgba(255,255,255,0.08)',
-    segmentBed: 'rgba(255,255,255,0.08)',
-    segmentActive: '#F2F2F5',
-    segmentActiveLabel: '#111114',
     buttonSolid: '#F2F2F5',
     buttonLabel: '#111114',
     buttonDisabled: 'rgba(255,255,255,0.18)',
-    closeBed: 'rgba(255,255,255,0.10)',
   },
 } as const;
 
-/** Form sheet for adding a user passage: title, pasted text, target pace. */
+/** Modal for adding a user passage: title, pasted text, target pace. The
+ * screen title and close button live in the native stack toolbar. */
 export default function PassageEditorScreen() {
   const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
   const colors = palette[scheme];
   const theme = THEME[scheme];
-  const hasGlass = isLiquidGlassAvailable();
 
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
@@ -90,28 +78,14 @@ export default function PassageEditorScreen() {
         : `${wordCount} words · ~${minutes} min${minutes > 1 ? 's' : ''} at ${targetWpm} wpm`;
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.screen, { backgroundColor: colors.background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <>
       <ScrollView
+        style={{ flex: 1, backgroundColor: colors.background }}
+        contentInsetAdjustmentBehavior="automatic"
+        automaticallyAdjustKeyboardInsets
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <Text style={[styles.title, { color: colors.foreground }]}>New Passage</Text>
-          <Pressable onPress={handleClose} hitSlop={8}>
-            {hasGlass ? (
-              <GlassView glassEffectStyle="regular" isInteractive style={styles.close}>
-                <HugeiconsIcon icon={Cancel01Icon} size={18} color={colors.foreground} strokeWidth={1.5} />
-              </GlassView>
-            ) : (
-              <View style={[styles.close, { backgroundColor: theme.closeBed }]}>
-                <HugeiconsIcon icon={Cancel01Icon} size={18} color={colors.foreground} strokeWidth={1.5} />
-              </View>
-            )}
-          </Pressable>
-        </View>
-
         <Text style={[styles.label, { color: theme.secondary }]}>Title</Text>
         <TextInput
           value={title}
@@ -141,31 +115,14 @@ export default function PassageEditorScreen() {
         />
 
         <Text style={[styles.label, { color: theme.secondary }]}>Reading pace</Text>
-        <View style={[styles.segments, { backgroundColor: theme.segmentBed }]}>
-          {PACE_OPTIONS.map((option, index) => {
-            const active = index === paceIndex;
-            return (
-              <Pressable
-                key={option.label}
-                onPress={() => {
-                  Haptics.selectionAsync();
-                  setPaceIndex(index);
-                }}
-                style={[
-                  styles.segment,
-                  active && { backgroundColor: theme.segmentActive },
-                ]}>
-                <Text
-                  style={[
-                    styles.segmentLabel,
-                    { color: active ? theme.segmentActiveLabel : colors.foreground },
-                  ]}>
-                  {option.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+        <PacePicker
+          options={PACE_OPTIONS}
+          selectedIndex={paceIndex}
+          onSelect={(index) => {
+            Haptics.selectionAsync();
+            setPaceIndex(index);
+          }}
+        />
 
         <Text style={[styles.preview, { color: theme.secondary }]}>{preview}</Text>
 
@@ -184,35 +141,43 @@ export default function PassageEditorScreen() {
           </View>
         </Pressable>
       </ScrollView>
-    </KeyboardAvoidingView>
+
+      {/* Custom title on the LEFT of the header bar (iOS centers regular
+          titles), vertically centered via the fixed-size toolbar view. */}
+      <Stack.Toolbar placement="left">
+        {/* hidesSharedBackground drops the iOS 26 glass capsule behind the
+            item — the title should sit directly on the screen background. */}
+        <Stack.Toolbar.View hidesSharedBackground>
+          <View style={styles.headerTitleBox}>
+            <Text style={[styles.headerTitle, { color: colors.foreground }]}>
+              New Passage
+            </Text>
+          </View>
+        </Stack.Toolbar.View>
+      </Stack.Toolbar>
+      <Stack.Toolbar placement="right">
+        <Stack.Toolbar.Button icon="xmark" onPress={handleClose} />
+      </Stack.Toolbar>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
+  // Toolbar views need one child with explicit width/height; centering
+  // vertically inside it keeps the text on the bar's middle line.
+  headerTitleBox: {
+    width: 200,
+    height: 36,
+    justifyContent: 'center',
+  },
+  headerTitle: {
+    fontSize: 21,
+    fontFamily: fonts.semibold,
+    letterSpacing: -0.3,
   },
   content: {
     padding: 24,
     paddingBottom: 48,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 26,
-    fontFamily: fonts.bold,
-    letterSpacing: -0.4,
-  },
-  close: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   label: {
     fontSize: 13,
@@ -232,25 +197,6 @@ const styles = StyleSheet.create({
     minHeight: 160,
     maxHeight: 260,
     lineHeight: 23,
-  },
-  segments: {
-    flexDirection: 'row',
-    borderRadius: 16,
-    borderCurve: 'continuous',
-    padding: 4,
-    gap: 4,
-  },
-  segment: {
-    flex: 1,
-    height: 40,
-    borderRadius: 12,
-    borderCurve: 'continuous',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentLabel: {
-    fontSize: 15,
-    fontFamily: fonts.semibold,
   },
   preview: {
     fontSize: 14,

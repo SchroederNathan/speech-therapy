@@ -5,6 +5,7 @@ import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useMinimizeOnScroll } from '@/components/glass-tabs';
+import { HeaderActions } from '@/components/header-actions';
 import { PassageCarousel } from '@/components/passage-carousel';
 import { DrillCard } from '@/components/practice/drill-card';
 import { FreestyleCard } from '@/components/practice/freestyle-card';
@@ -17,7 +18,7 @@ import { fonts } from '@/constants/fonts';
 import { PASSAGES } from '@/constants/passages';
 import { randomTopic, TOPICS, type FreestyleTopic } from '@/constants/topics';
 import { useCustomPassages } from '@/hooks/use-custom-passages';
-import { useRecommendations } from '@/hooks/use-session-history';
+import { useDerivedStats, useRecommendations } from '@/hooks/use-session-history';
 import {
   FREESTYLE_ID_PREFIX,
   freestyleTopicIdFrom,
@@ -51,6 +52,7 @@ export default function PracticeScreen() {
 
   const recommendations = useRecommendations();
   const customPassages = useCustomPassages();
+  const stats = useDerivedStats();
   const [topic, setTopic] = useState<FreestyleTopic>(TOPICS[0]);
 
   const shuffleTopic = useCallback(() => {
@@ -87,9 +89,16 @@ export default function PracticeScreen() {
         paddingHorizontal: 20,
         paddingBottom: 140,
       }}>
-      <IntroReveal order={0}>
-        <Text style={[styles.screenTitle, { color: colors.foreground }]}>Practice</Text>
-      </IntroReveal>
+      {/* Same header composition as Home: title left, streak + avatar right
+          (glass capsules → transform-only reveal). */}
+      <View style={styles.header}>
+        <IntroReveal order={0}>
+          <Text style={[styles.screenTitle, { color: colors.foreground }]}>Practice</Text>
+        </IntroReveal>
+        <IntroReveal order={0} fade={false}>
+          <HeaderActions streak={stats.streak} />
+        </IntroReveal>
+      </View>
 
       {/* Recommended: real-data picks; glass cards → transform-only reveal. */}
       <IntroReveal order={1}>
@@ -162,6 +171,11 @@ export default function PracticeScreen() {
 }
 
 const styles = StyleSheet.create({
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   screenTitle: {
     fontSize: 34,
     fontFamily: fonts.bold,
