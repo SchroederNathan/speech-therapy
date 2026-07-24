@@ -3,16 +3,32 @@ import { StyleSheet, Text, useColorScheme, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AnalyticsUpIcon } from '@hugeicons-pro/core-stroke-rounded';
+import { useMemo } from 'react';
+
 import { DailyGoalCard } from '@/components/daily-goal-card';
+import { EmptyStateCard } from '@/components/empty-state-card';
 import { useMinimizeOnScroll } from '@/components/glass-tabs';
 import { HeaderActions } from '@/components/header-actions';
 import { PassageCarousel } from '@/components/passage-carousel';
+import { ProgressCard } from '@/components/progress-card';
 import { IntroReveal } from '@/components/splash';
 import { WeeklyProgress } from '@/components/weekly-progress';
+import { WordsToMaster } from '@/components/words-to-master';
 import { palette } from '@/constants/colors';
 import { fonts } from '@/constants/fonts';
-import { PASSAGES } from '@/constants/passages';
-import { useDerivedStats } from '@/hooks/use-session-history';
+import { getPassage, PASSAGES } from '@/constants/passages';
+import { useSessionRecords, useDerivedStats } from '@/hooks/use-session-history';
+import { timeAgo } from '@/lib/format';
+import {
+  bestSession,
+  scoreRating,
+  topChallengingWords,
+  totals,
+  weekTotals,
+} from '@/lib/stats';
+
+const MODE_LABELS = { passage: 'Passage', drill: 'Drill', freestyle: 'Freestyle' } as const;
 
 function greeting() {
   const hour = new Date().getHours();
@@ -29,8 +45,36 @@ export default function HomeScreen() {
   const colors = dark ? palette.dark : palette.light;
 
   const stats = useDerivedStats();
+  const records = useSessionRecords();
   const percent = Math.round(stats.todayProgress * 100);
   const startPractice = () => router.push('/practice');
+
+  // Progress + trouble words are derived only from real history — never demo
+  // data. With nothing recorded yet, `progress` is null and the section shows
+  // an empty state that says so rather than inventing numbers.
+  const { progress, words } = useMemo(() => {
+    const best = bestSession(records);
+    if (!best) {
+      return { progress: null, words: [] as { word: string; count: number }[] };
+    }
+    const now = Date.now();
+    const t = totals(records);
+    const week = weekTotals(records, now);
+    return {
+      progress: {
+        bestScore: Math.round(t.bestOverall),
+        rating: scoreRating(t.bestOverall),
+        sessionLabel: getPassage(best.passageId)?.title ?? MODE_LABELS[best.mode],
+        timeAgo: timeAgo(best.completedAt, now),
+        totalMinutes: Math.round(t.minutes),
+        minutesThisWeek: Math.round(week.minutes),
+        totalSessions: t.sessions,
+        sessionsThisWeek: week.sessions,
+        longestStreak: t.longestStreak,
+      },
+      words: topChallengingWords(records, 5),
+    };
+  }, [records]);
 
   return (
     <Animated.ScrollView
@@ -72,6 +116,36 @@ export default function HomeScreen() {
           onStart={(item) => router.push(`/session/${item.id}`)}
         />
       </IntroReveal>
+      <IntroReveal order={5}>
+        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Your progress</Text>
+        <Text style={[styles.sectionSubtitle, { color: dark ? '#9E9EA6' : '#77777E' }]}>
+          Everything you&apos;ve built so far
+        </Text>
+      </IntroReveal>
+      <IntroReveal order={6} fade={false}>
+        {progress ? (
+          <ProgressCard {...progress} />
+        ) : (
+          <EmptyStateCard
+            icon={AnalyticsUpIcon}
+            title="No progress yet"
+            subtitle="Finish your first practice session and your best score, streak, and minutes will show up here."
+          />
+        )}
+      </IntroReveal>
+      {words.length > 0 && (
+        <>
+          <IntroReveal order={7}>
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Words to master</Text>
+            <Text style={[styles.sectionSubtitle, { color: dark ? '#9E9EA6' : '#77777E' }]}>
+              The ones that trip you up most often
+            </Text>
+          </IntroReveal>
+          <IntroReveal order={8} fade={false}>
+            <WordsToMaster words={words} onPracticeAll={startPractice} />
+          </IntroReveal>
+        </>
+      )}
     </Animated.ScrollView>
   );
 }

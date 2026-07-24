@@ -181,6 +181,50 @@ export type Totals = {
   longestStreak: number;
 };
 
+/** Minutes practiced and session count within the last 7 days ending `now` —
+ * the "this week" deltas next to the running totals. */
+export function weekTotals(
+  records: readonly SessionRecord[],
+  now: number,
+): { minutes: number; sessions: number } {
+  const since = now - 7 * DAY_MS;
+  let minutes = 0;
+  let sessions = 0;
+  for (const r of records) {
+    if (r.completedAt >= since && r.completedAt <= now) {
+      minutes += r.durationMs / 60_000;
+      sessions += 1;
+    }
+  }
+  return { minutes, sessions };
+}
+
+/** The highest-scoring session, ties broken by most recent — null when there's
+ * no history yet. Drives the "best score" hero. */
+export function bestSession(records: readonly SessionRecord[]): SessionRecord | null {
+  let best: SessionRecord | null = null;
+  for (const r of records) {
+    if (
+      best == null ||
+      r.overallScore > best.overallScore ||
+      (r.overallScore === best.overallScore && r.completedAt > best.completedAt)
+    ) {
+      best = r;
+    }
+  }
+  return best;
+}
+
+/** Rating tier label for an overall score (0–100). Bands are wide so the badge
+ * feels earned, not incremental. */
+export function scoreRating(score: number): string {
+  if (score >= 90) return 'ORATOR';
+  if (score >= 80) return 'SPEAKER';
+  if (score >= 70) return 'PRESENTER';
+  if (score >= 50) return 'RISING';
+  return 'WARMING UP';
+}
+
 export function totals(records: readonly SessionRecord[]): Totals {
   let minutes = 0;
   let bestOverall = 0;
