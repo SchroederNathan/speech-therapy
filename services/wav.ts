@@ -190,3 +190,19 @@ export function downsampleWaveform(bytes: Uint8Array, buckets = 30): number[] {
   const peak = Math.max(...out, 1e-6);
   return out.map((v) => Math.min(1, Math.max(0.08, v / peak)));
 }
+
+/** ~30 normalized 0..1 amplitude buckets from the live meter history — the
+ * playback-pill waveform fallback when no full WAV could be assembled.
+ * (Shared by the passage and freestyle session hooks.) */
+export function waveformFromMeterHistory(history: number[]): number[] {
+  if (history.length === 0) return Array.from({ length: 30 }, () => 0.15);
+  const buckets = Array.from({ length: 30 }, (_, b) => {
+    const start = Math.floor((b * history.length) / 30);
+    const end = Math.max(start + 1, Math.floor(((b + 1) * history.length) / 30));
+    let sum = 0;
+    for (let i = start; i < end; i++) sum += history[i];
+    return sum / (end - start);
+  });
+  const peak = Math.max(...buckets, 1e-6);
+  return buckets.map((value) => Math.min(1, Math.max(0.08, value / peak)));
+}

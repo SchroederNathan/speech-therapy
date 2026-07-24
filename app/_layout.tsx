@@ -69,6 +69,10 @@ export default function RootLayout() {
                 name="session"
                 options={{ presentation: 'fullScreenModal', headerShown: false }}
               />
+              <Stack.Screen
+                name="passage-editor"
+                options={{ presentation: 'modal', headerShown: false }}
+              />
             </Stack>
           ) : null}
           {/* The splash backdrop inverts the scheme (light mode plays on

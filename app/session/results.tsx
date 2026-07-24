@@ -10,6 +10,7 @@ import { PlaybackPill } from '@/components/session/playback-pill';
 import { ResultsFooter } from '@/components/session/results-footer';
 import { ScoreGauge } from '@/components/session/score-gauge';
 import { SessionTopBar } from '@/components/session/session-top-bar';
+import { TranscriptCard } from '@/components/session/transcript-card';
 import { WordBreakdown } from '@/components/session/word-breakdown';
 import { palette } from '@/constants/colors';
 import { fonts } from '@/constants/fonts';
@@ -74,7 +75,11 @@ export default function ResultsScreen() {
           <AiCoachingCard result={result} />
         </View>
         <View style={styles.breakdown}>
-          <WordBreakdown words={result.words} />
+          {result.mode === 'freestyle' ? (
+            <TranscriptCard transcript={result.transcript ?? ''} />
+          ) : (
+            <WordBreakdown words={result.words} />
+          )}
         </View>
       </ScrollView>
 

@@ -441,3 +441,46 @@ export function buildLiveFallbackResult(params: ResultBuildParams): SessionResul
     source: 'live',
   };
 }
+
+/** Conversational default when no reference text sets a target. */
+export const FREESTYLE_TARGET_WPM = 150;
+
+export type FreestyleResultParams = {
+  transcript: string;
+  paceWpm: number;
+  fillerCount: number;
+  durationMs: number;
+  audioUri: string | null;
+  waveform: number[];
+};
+
+/**
+ * Freestyle (no reference text) result. Azure's scripted assessment doesn't
+ * apply, so the scores are documented live proxies: pace vs a conversational
+ * 150wpm, filler rate, and a fluency blend of the two. Accuracy/completeness
+ * are 0 and intonation the neutral 70 — the results UI hides all three in
+ * freestyle mode.
+ */
+export function buildFreestyleResult(params: FreestyleResultParams): SessionResult {
+  const pace = paceScore(params.paceWpm, FREESTYLE_TARGET_WPM);
+  const filler = fillerScore(params.fillerCount, params.durationMs);
+  const fluency = clampScore(0.55 * pace + 0.45 * filler);
+
+  return {
+    mode: 'freestyle',
+    transcript: params.transcript,
+    overallScore: clampScore(0.45 * fluency + 0.3 * pace + 0.25 * filler),
+    accuracy: 0,
+    fluency,
+    completeness: 0,
+    intonation: 70,
+    paceWpm: params.paceWpm,
+    targetWpm: FREESTYLE_TARGET_WPM,
+    fillerCount: params.fillerCount,
+    words: [],
+    audioUri: params.audioUri,
+    durationMs: params.durationMs,
+    waveform: params.waveform,
+    source: 'live',
+  };
+}

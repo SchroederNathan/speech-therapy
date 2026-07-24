@@ -2,7 +2,6 @@ import { FireIcon, User03Icon } from '@hugeicons-pro/core-solid-rounded';
 import { HugeiconsIcon } from '@hugeicons/react-native';
 import { GlassContainer, GlassView } from 'expo-glass-effect';
 import { router } from 'expo-router';
-import { useState } from 'react';
 import { StyleSheet, Text, useColorScheme, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,8 +14,8 @@ import { WeeklyProgress } from '@/components/weekly-progress';
 import { palette } from '@/constants/colors';
 import { fonts } from '@/constants/fonts';
 import { PASSAGES } from '@/constants/passages';
+import { useDerivedStats } from '@/hooks/use-session-history';
 
-const MINUTES_GOAL = 20;
 const STREAK_FLAME = '#FF9500';
 
 function greeting() {
@@ -33,13 +32,9 @@ export default function HomeScreen() {
   const dark = useColorScheme() === 'dark';
   const colors = dark ? palette.dark : palette.light;
 
-  // Demo state until real session data exists: each "practice" adds minutes so
-  // the gauge fill + numeric percent transition are visible; wraps past the goal.
-  const [minutesDone, setMinutesDone] = useState(9);
-  const percent = Math.round(Math.min(minutesDone / MINUTES_GOAL, 1) * 100);
-  const startPractice = () => {
-    setMinutesDone((m) => (m >= MINUTES_GOAL ? 3 : Math.min(m + 4, MINUTES_GOAL)));
-  };
+  const stats = useDerivedStats();
+  const percent = Math.round(stats.todayProgress * 100);
+  const startPractice = () => router.push('/practice');
 
   return (
     <Animated.ScrollView
@@ -64,7 +59,9 @@ export default function HomeScreen() {
           <GlassContainer spacing={8} style={styles.headerItems}>
             <GlassView isInteractive style={styles.streak}>
               <HugeiconsIcon icon={FireIcon} size={24} color={STREAK_FLAME} />
-              <Text style={[styles.streakCount, { color: colors.foreground }]}>1</Text>
+              <Text style={[styles.streakCount, { color: colors.foreground }]}>
+                {stats.streak}
+              </Text>
             </GlassView>
             <GlassView isInteractive style={styles.avatar}>
               <HugeiconsIcon
@@ -77,7 +74,7 @@ export default function HomeScreen() {
         </IntroReveal>
       </View>
       <IntroReveal order={1}>
-        <WeeklyProgress todayProgress={percent / 100} />
+        <WeeklyProgress todayProgress={stats.todayProgress} history={stats.weeklyHistory} />
       </IntroReveal>
       <IntroReveal order={2} fade={false}>
         <DailyGoalCard percent={percent} onStartPractice={startPractice} />

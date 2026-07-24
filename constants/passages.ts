@@ -7,6 +7,8 @@ export const PASSAGES: Passage[] = [
     id: 'epic-speech',
     title: 'Epic Speech',
     duration: '~2 mins',
+    category: 'stories',
+    skills: ['intonation', 'fluency'],
     artwork: {
       base: ['rgba(45,75,230,0.95)', 'rgba(48,44,150,0.88)'],
       blob: ['rgba(255,130,80,0.95)', 'rgba(240,80,190,0.65)'],
@@ -26,6 +28,8 @@ Good tooling rarely announces itself. It just quietly deletes a chore you had st
     id: 'tongue-twisters',
     title: 'Tongue Twisters',
     duration: '~3 mins',
+    category: 'twisters',
+    skills: ['accuracy'],
     artwork: {
       base: ['rgba(16,130,150,0.92)', 'rgba(24,86,180,0.85)'],
       blob: ['rgba(120,255,190,0.9)', 'rgba(60,210,255,0.55)'],
@@ -45,6 +49,8 @@ Fuzzy Wuzzy was a bear. Fuzzy Wuzzy had no hair. Fuzzy Wuzzy wasn't fuzzy, was h
     id: 'calm-narration',
     title: 'Calm Narration',
     duration: '~4 mins',
+    category: 'narration',
+    skills: ['fluency'],
     artwork: {
       base: ['rgba(130,60,220,0.92)', 'rgba(70,50,190,0.85)'],
       blob: ['rgba(255,190,120,0.92)', 'rgba(255,110,180,0.55)'],
@@ -64,6 +70,8 @@ Evening arrives the way it always does, gradually and then all at once. The ligh
     id: 'news-brief',
     title: 'News Brief',
     duration: '~2 mins',
+    category: 'news',
+    skills: ['pace'],
     artwork: {
       base: ['rgba(220,120,40,0.92)', 'rgba(190,60,90,0.85)'],
       blob: ['rgba(255,230,140,0.92)', 'rgba(255,150,90,0.55)'],
@@ -85,6 +93,8 @@ That's the briefing. Thank you for listening, and have a wonderful night.`,
     id: 'poetry-lines',
     title: 'Poetry Lines',
     duration: '~3 mins',
+    category: 'poetry',
+    skills: ['intonation', 'fluency'],
     artwork: {
       base: ['rgba(40,150,120,0.92)', 'rgba(30,100,160,0.85)'],
       blob: ['rgba(180,255,220,0.9)', 'rgba(90,220,200,0.5)'],

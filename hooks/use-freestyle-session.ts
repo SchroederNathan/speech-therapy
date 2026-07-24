@@ -1,56 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  cancelAnimation,
-  Easing,
-  useSharedValue,
-  withSequence,
-  withTiming,
-} from 'react-native-reanimated';
+import { useSharedValue, withTiming } from 'react-native-reanimated';
 import { File, Paths } from 'expo-file-system';
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 
-import { tokenizePassage } from '@/lib/passage-text';
-import { PassageAligner } from '@/services/alignment';
-import { assessSession } from '@/services/azure-pronunciation';
-import {
-  buildContextualStrings,
-  selectBestHypothesis,
-} from '@/services/live-recognition';
+import { countFillers } from '@/lib/fillers';
+import { tokenizeTranscript } from '@/services/alignment';
 import { claimEngine, releaseEngine } from '@/services/recognition-owner';
-import { buildAzureResult, buildChunks, buildLiveFallbackResult } from '@/services/scoring';
+import { buildFreestyleResult } from '@/services/scoring';
 import {
   concatWavs,
   downsampleWaveform,
-  sliceWav,
   waveformFromMeterHistory,
   wavDurationMs,
 } from '@/services/wav';
 import type {
-  Passage,
+  FreestyleSession,
   PracticeError,
   PracticeErrorCode,
-  PracticeSession,
   PracticeStatus,
   SessionResult,
 } from '@/types/session';
 
 /**
- * The real practice-session engine: expo-speech-recognition for the live
- * layer (frontier, WPM, fillers, mic level, persisted 16kHz WAV segments),
- * Azure Pronunciation Assessment at stop() for the scoring layer, and a
- * live-derived fallback so the session NEVER dead-ends without a result.
- *
- * Lifecycle notes (see plan):
- * - There is no native pause API: pause = stop the recognizer (finishing the
- *   current recording segment), resume = a fresh recognizer session writing a
- *   new segment. The aligner persists across segments.
- * - On-device recognition is tried first; if starting fails (simulators often
- *   lack on-device model assets) the engine retries once network-based.
- * - Unexpected session ends (iOS silence timeouts, transient errors) while
- *   listening auto-restart into a new segment, capped to avoid loops.
+ * The freestyle (impromptu) session engine: the same expo-speech-recognition
+ * lifecycle as use-practice-session.real.ts (segments across pause/resume,
+ * volume metering, transient-error auto-restart, on-device → network retry)
+ * WITHOUT the passage aligner — there is no reference text. The live surface
+ * is the transcript itself; fillers come from the shared lexicon applied to
+ * final results; scoring is the live-proxy freestyle builder.
  */
 
 const TICK_MS = 250;
@@ -58,39 +38,40 @@ const WPM_EVERY_TICKS = 4; // 1Hz
 const MAX_CONSECUTIVE_AUTO_RESTARTS = 5;
 const AUDIO_END_TIMEOUT_MS = 3_000;
 const METER_HISTORY_CAP = 4_096;
-const VOICE_ON_DB = 0;
-const VOICE_OFF_DB = -0.8;
-const VOICE_HOLD_MS = 280;
+
+// Rolling-window live WPM (mirrors the aligner's constants).
+const WPM_WINDOW_MS = 15_000;
+const WPM_MIN_ELAPSED_MS = 5_000;
+const WPM_MIN_SPAN_MS = 2_000;
 
 type RecognitionMode = 'on-device' | 'network';
 
+type WpmSample = { atActiveMs: number; words: number };
+
 type Machine = {
   status: PracticeStatus;
-  aligner: PassageAligner;
   sessionId: string;
   mode: RecognitionMode;
   retriedNetwork: boolean;
-  /** We initiated the current stop/abort — don't treat its `end` as unexpected. */
   expectEnd: boolean;
   stopping: boolean;
-  /** Recognition sessions started/ended — auto-restart only when they balance. */
   startedCount: number;
   endedCount: number;
-  /** Current recording segment index (one per recognizer session). */
   recSession: number;
   segmentUris: (string | null)[];
-  segmentActiveStartMs: number[];
-  /** Segment indices whose audiostart fired but audioend hasn't. */
   audioPending: number[];
   accumulatedActiveMs: number;
   listeningSinceWall: number | null;
-  frontierIndex: number;
-  speechActive: boolean;
-  lastVoiceWall: number;
   autoRestarts: number;
   lastTransientError: { code: string; message: string } | null;
   meterEma: number;
   meterHistory: number[];
+  /** Raw text of each committed final result, in order. */
+  finalParts: string[];
+  /** Total normalized word count across final results. */
+  finalWordCount: number;
+  fillerCount: number;
+  wpmSamples: WpmSample[];
   result: SessionResult | null;
 };
 
@@ -111,22 +92,20 @@ function makeSessionId(): string {
   return `${Date.now().toString(36)}-${Math.floor(Math.random() * 0xffff).toString(16)}`;
 }
 
-export function usePracticeSession(passage: Passage): PracticeSession {
-  const tokenized = useMemo(() => tokenizePassage(passage.text), [passage.text]);
-
+export function useFreestyleSession(): FreestyleSession {
   const [status, setStatus] = useState<PracticeStatus>('idle');
   const [error, setError] = useState<PracticeError | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [liveWpm, setLiveWpm] = useState(0);
   const [fillerCount, setFillerCount] = useState(0);
-  const [currentWordIndex, setCurrentWordIndex] = useState(0);
+  const [finalTranscript, setFinalTranscript] = useState('');
+  const [interimTranscript, setInterimTranscript] = useState('');
   const [result, setResult] = useState<SessionResult | null>(null);
   const meterLevel = useSharedValue(0);
-  const currentWordFraction = useSharedValue(0);
 
   const instanceIdRef = useRef<symbol | null>(null);
   if (instanceIdRef.current === null) {
-    instanceIdRef.current = Symbol('practice-session');
+    instanceIdRef.current = Symbol('freestyle-session');
   }
   const instanceId = instanceIdRef.current;
   const mounted = useRef(true);
@@ -135,7 +114,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
   if (machineRef.current === null) {
     machineRef.current = {
       status: 'idle',
-      aligner: new PassageAligner(tokenized),
       sessionId: makeSessionId(),
       mode: 'on-device',
       retriedNetwork: false,
@@ -145,20 +123,21 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       endedCount: 0,
       recSession: -1,
       segmentUris: [],
-      segmentActiveStartMs: [],
       audioPending: [],
       accumulatedActiveMs: 0,
       listeningSinceWall: null,
-      frontierIndex: 0,
-      speechActive: false,
-      lastVoiceWall: 0,
       autoRestarts: 0,
       lastTransientError: null,
       meterEma: 0,
       meterHistory: [],
+      finalParts: [],
+      finalWordCount: 0,
+      fillerCount: 0,
+      wpmSamples: [],
       result: null,
     };
   }
+
   const activeMs = () => {
     const m = machineRef.current!;
     return (
@@ -171,67 +150,20 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     if (mounted.current) setStatus(next);
   };
 
-  const currentWordDurationMs = (m: Machine) => {
-    const active = activeMs();
-    const live = m.aligner.getLiveWpm(active);
-    const wpm = Math.min(300, Math.max(60, live > 0 ? live : passage.targetWpm));
-    return 60_000 / wpm;
+  const getLiveWpm = (m: Machine, atActiveMs: number): number => {
+    if (atActiveMs < WPM_MIN_ELAPSED_MS || m.wpmSamples.length === 0) return 0;
+    const oldest = m.wpmSamples[0];
+    const spanMs = atActiveMs - oldest.atActiveMs;
+    if (spanMs < WPM_MIN_SPAN_MS) return 0;
+    const words = m.finalWordCount - oldest.words;
+    return Math.max(0, Math.round(words / (spanMs / 60_000)));
   };
 
-  /**
-   * Continue the active-word treatment on the UI runtime. Recognition events
-   * supply anchors; this animation only fills the short interval between them.
-   */
-  const animateWordProgress = (
-    m: Machine,
-    observedFraction: number,
-    resetForNewWord = false,
-  ) => {
-    cancelAnimation(currentWordFraction);
-    const observed = Math.max(0, Math.min(0.94, observedFraction));
-    if (!m.speechActive) {
-      const observedAnimation = withTiming(observed, {
-        duration: 70,
-        easing: Easing.out(Easing.quad),
-      });
-      currentWordFraction.value = resetForNewWord
-        ? withSequence(withTiming(0, { duration: 0 }), observedAnimation)
-        : observedAnimation;
-      return;
+  const recordWpmSample = (m: Machine, atActiveMs: number) => {
+    m.wpmSamples.push({ atActiveMs, words: m.finalWordCount });
+    while (m.wpmSamples.length > 1 && m.wpmSamples[0].atActiveMs < atActiveMs - WPM_WINDOW_MS) {
+      m.wpmSamples.shift();
     }
-
-    const remainingMs = Math.max(90, currentWordDurationMs(m) * (1 - observed));
-    const catchUp = withTiming(observed, {
-      duration: 55,
-      easing: Easing.out(Easing.quad),
-    });
-    const coast = withTiming(0.94, {
-      duration: remainingMs,
-      easing: Easing.linear,
-    });
-    currentWordFraction.value = resetForNewWord
-      ? withSequence(withTiming(0, { duration: 0 }), catchUp, coast)
-      : withSequence(catchUp, coast);
-  };
-
-  const setSpeechActive = (m: Machine, active: boolean) => {
-    if (m.speechActive === active) return;
-    m.speechActive = active;
-    if (active) {
-      animateWordProgress(m, m.aligner.currentWordFraction);
-    } else {
-      cancelAnimation(currentWordFraction);
-    }
-  };
-
-  const flushLiveFrontier = (m: Machine) => {
-    const next = Math.max(0, Math.min(tokenized.words.length, m.aligner.currentWordIndex));
-    const changed = next !== m.frontierIndex;
-    if (changed) {
-      m.frontierIndex = next;
-      if (mounted.current) setCurrentWordIndex(next);
-    }
-    animateWordProgress(m, m.aligner.currentWordFraction, changed);
   };
 
   const fail = (code: PracticeErrorCode, message: string) => {
@@ -239,9 +171,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     if (m.status === 'done') return;
     m.expectEnd = true;
     m.listeningSinceWall = null;
-    m.speechActive = false;
-    cancelAnimation(currentWordFraction);
-    currentWordFraction.value = 0;
     meterLevel.value = withTiming(0, { duration: 160 });
     try {
       ExpoSpeechRecognitionModule.abort();
@@ -256,27 +185,22 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     const m = machineRef.current!;
     m.recSession += 1;
     m.segmentUris[m.recSession] = null;
-    m.segmentActiveStartMs[m.recSession] = activeMs();
-    m.aligner.beginSegment(m.recSession);
     m.expectEnd = false;
     m.startedCount += 1;
     ExpoSpeechRecognitionModule.start({
       lang: 'en-US',
       interimResults: true,
       continuous: true,
-      maxAlternatives: 5,
-      contextualStrings: buildContextualStrings(
-        tokenized,
-        m.aligner.currentWordIndex,
-      ),
+      // No reference to rerank against — take the recognizer's best.
+      maxAlternatives: 1,
       requiresOnDeviceRecognition: mode === 'on-device',
-      addsPunctuation: false,
+      addsPunctuation: true,
       iosTaskHint: 'dictation',
       volumeChangeEventOptions: { enabled: true, intervalMillis: 100 },
       recordingOptions: {
         persist: true,
         outputDirectory: Paths.cache.uri,
-        outputFileName: `practice-${m.sessionId}-seg${m.recSession}.wav`,
+        outputFileName: `freestyle-${m.sessionId}-seg${m.recSession}.wav`,
         outputSampleRate: 16000,
         outputEncoding: 'pcmFormatInt16',
       },
@@ -284,33 +208,31 @@ export function usePracticeSession(passage: Passage): PracticeSession {
   };
 
   const resetMachine = (m: Machine) => {
-    m.aligner.reset();
     m.sessionId = makeSessionId();
     m.retriedNetwork = false;
     m.stopping = false;
     m.recSession = -1;
     m.segmentUris = [];
-    m.segmentActiveStartMs = [];
     m.audioPending = [];
     m.accumulatedActiveMs = 0;
     m.listeningSinceWall = null;
-    m.frontierIndex = 0;
-    m.speechActive = false;
-    m.lastVoiceWall = 0;
     m.autoRestarts = 0;
     m.lastTransientError = null;
     m.meterHistory = [];
+    m.finalParts = [];
+    m.finalWordCount = 0;
+    m.fillerCount = 0;
+    m.wpmSamples = [];
     m.result = null;
     if (mounted.current) {
       setElapsedMs(0);
       setLiveWpm(0);
       setFillerCount(0);
-      setCurrentWordIndex(0);
+      setFinalTranscript('');
+      setInterimTranscript('');
       setResult(null);
       setError(null);
     }
-    cancelAnimation(currentWordFraction);
-    currentWordFraction.value = 0;
     meterLevel.value = withTiming(0, { duration: 120 });
   };
 
@@ -319,40 +241,27 @@ export function usePracticeSession(passage: Passage): PracticeSession {
   useSpeechRecognitionEvent('result', (event) => {
     const m = machineRef.current!;
     if (m.status !== 'listening' && m.status !== 'processing' && m.status !== 'paused') return;
-    const atActiveMs = activeMs();
-    const best = selectBestHypothesis(
-      (event.results ?? []).map((candidate) => ({
-        transcript: candidate.transcript ?? '',
-        confidence: candidate.confidence,
-        segments: candidate.segments,
-      })),
-      m.aligner,
-      event.isFinal,
-      atActiveMs,
-    );
-    if (!best) return;
+    const transcript = event.results?.[0]?.transcript ?? '';
+    if (transcript.trim().length === 0 && !event.isFinal) return;
     m.autoRestarts = 0; // real progress — reset the restart budget
     m.lastTransientError = null;
-    m.aligner.handleEvent({
-      transcript: best.transcript,
-      isFinal: event.isFinal,
-      atActiveMs,
-      segments: best.segments,
-    });
-    flushLiveFrontier(m);
-  });
 
-  useSpeechRecognitionEvent('speechstart', () => {
-    const m = machineRef.current!;
-    if (m.status !== 'listening') return;
-    m.lastVoiceWall = Date.now();
-    setSpeechActive(m, true);
-  });
-
-  useSpeechRecognitionEvent('speechend', () => {
-    const m = machineRef.current!;
-    if (m.status !== 'listening') return;
-    setSpeechActive(m, false);
+    if (event.isFinal) {
+      const trimmed = transcript.trim();
+      if (trimmed.length > 0) {
+        m.finalParts.push(trimmed);
+        const norms = tokenizeTranscript(trimmed).map((t) => t.norm);
+        m.finalWordCount += norms.length;
+        m.fillerCount += countFillers(norms);
+      }
+      if (mounted.current) {
+        setFinalTranscript(m.finalParts.join(' '));
+        setInterimTranscript('');
+        setFillerCount(m.fillerCount);
+      }
+    } else if (mounted.current) {
+      setInterimTranscript(transcript);
+    }
   });
 
   useSpeechRecognitionEvent('volumechange', (event) => {
@@ -362,16 +271,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     m.meterEma = m.meterEma * 0.6 + level * 0.4;
     meterLevel.value = m.meterEma;
     if (m.meterHistory.length < METER_HISTORY_CAP) m.meterHistory.push(m.meterEma);
-    const now = Date.now();
-    if (event.value >= VOICE_ON_DB) {
-      m.lastVoiceWall = now;
-      setSpeechActive(m, true);
-    } else if (
-      event.value <= VOICE_OFF_DB &&
-      now - m.lastVoiceWall >= VOICE_HOLD_MS
-    ) {
-      setSpeechActive(m, false);
-    }
   });
 
   useSpeechRecognitionEvent('audiostart', (event) => {
@@ -389,7 +288,7 @@ export function usePracticeSession(passage: Passage): PracticeSession {
   useSpeechRecognitionEvent('error', (event) => {
     const m = machineRef.current!;
     if (event.error === 'aborted') return; // always self-inflicted
-    if (m.stopping) return; // keep whatever we have; processing continues
+    if (m.stopping) return;
 
     if (event.error === 'not-allowed') {
       fail('permission-denied', event.message || 'Microphone or speech recognition permission was denied.');
@@ -398,7 +297,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
 
     if (event.error === 'language-not-supported' || event.error === 'service-not-allowed') {
       if (m.mode === 'on-device' && !m.retriedNetwork) {
-        // Simulators often lack on-device model assets — retry network-based.
         m.retriedNetwork = true;
         m.mode = 'network';
         return; // the trailing `end` event performs the restart
@@ -407,10 +305,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       return;
     }
 
-    // Everything else (no-speech, speech-timeout, network, audio-capture,
-    // interrupted, busy, client, unknown) is transient while listening: the
-    // recognizer session will end and the `end` handler restarts it (with a
-    // budget so persistent failure surfaces as an error instead of a loop).
     if (m.status === 'listening') {
       m.lastTransientError = { code: event.error, message: event.message };
     }
@@ -420,13 +314,7 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     const m = machineRef.current!;
     m.endedCount += 1;
     if (m.status !== 'listening' || m.expectEnd) return;
-    // Only restart when no session is pending (guards a stale `end` arriving
-    // after we already started a fresh session).
     if (m.endedCount < m.startedCount) return;
-    // An on-device session that dies with an error before producing anything
-    // (e.g. simulators without local assets fail with kLSRErrorDomain 300,
-    // surfaced as 'audio-capture') gets one free retry as network-based
-    // recognition — the explicit service-not-allowed path never fires there.
     if (m.mode === 'on-device' && !m.retriedNetwork && m.lastTransientError) {
       m.retriedNetwork = true;
       m.mode = 'network';
@@ -448,28 +336,24 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     startRecognition(m.mode);
   });
 
-  // ---- low-frequency metrics loop (animation is event/UI-runtime driven) ---
+  // ---- low-frequency metrics loop -----------------------------------------
 
   useEffect(() => {
     let tick = 0;
     const interval = setInterval(() => {
       const m = machineRef.current!;
       tick += 1;
-      if (m.status !== 'listening') {
-        return;
-      }
+      if (m.status !== 'listening') return;
       const active = activeMs();
       setElapsedMs(active);
-
       if (tick % WPM_EVERY_TICKS === 0) {
-        m.aligner.recordWpmSample(active);
-        setLiveWpm(m.aligner.getLiveWpm(active));
-        setFillerCount(m.aligner.fillerCount);
+        recordWpmSample(m, active);
+        setLiveWpm(getLiveWpm(m, active));
       }
     }, TICK_MS);
     return () => clearInterval(interval);
-    // Shared values and passage identity are stable for this screen.
-  }, [meterLevel, passage.targetWpm, currentWordFraction]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---- unmount cleanup ------------------------------------------------------
 
@@ -481,9 +365,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       releaseEngine(instanceId);
       if (m.status === 'listening' || m.status === 'paused') {
         m.expectEnd = true;
-        m.speechActive = false;
-        cancelAnimation(currentWordFraction);
-        currentWordFraction.value = 0;
         meterLevel.value = withTiming(0, { duration: 120 });
         try {
           ExpoSpeechRecognitionModule.abort();
@@ -493,7 +374,8 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         deleteSegmentFiles(m);
       }
     };
-  }, [instanceId, currentWordFraction, meterLevel]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId]);
 
   // ---- processing (stop) ----------------------------------------------------
 
@@ -509,48 +391,32 @@ export function usePracticeSession(passage: Passage): PracticeSession {
   const finishProcessing = async (): Promise<SessionResult> => {
     const m = machineRef.current!;
     const durationMs = Math.max(1, Math.round(m.accumulatedActiveMs));
-    const aligner = m.aligner;
-    const statuses = aligner.refWordStatuses();
     const paceWpm =
-      aligner.matchedCount > 0 && durationMs >= 1_000
-        ? Math.round(aligner.matchedCount / (durationMs / 60_000))
+      m.finalWordCount > 0 && durationMs >= 1_000
+        ? Math.round(m.finalWordCount / (durationMs / 60_000))
         : 0;
 
     let audioUri: string | null = null;
     let waveform: number[] | null = null;
-    const segmentBytes: (Uint8Array | null)[] = [];
-    const segmentDurations: number[] = [];
-
     try {
-      const loadedSegments = await Promise.all(m.segmentUris.map(async (uri) => {
-        let bytes: Uint8Array | null = null;
-        if (uri) {
+      const loaded = await Promise.all(
+        m.segmentUris.map(async (uri): Promise<Uint8Array | null> => {
+          if (!uri) return null;
           try {
             const file = new File(uri);
-            if (file.exists) bytes = await file.bytes();
+            if (!file.exists) return null;
+            const bytes = await file.bytes();
+            wavDurationMs(bytes); // validates the header
+            return bytes;
           } catch {
-            bytes = null;
+            return null;
           }
-        }
-        let duration = 0;
-        if (bytes) {
-          try {
-            duration = wavDurationMs(bytes);
-          } catch {
-            bytes = null;
-          }
-        }
-        return { bytes, duration };
-      }));
-      for (const segment of loadedSegments) {
-        segmentBytes.push(segment.bytes);
-        segmentDurations.push(segment.duration);
-      }
-
-      const playable = segmentBytes.filter((b): b is Uint8Array => b != null);
+        }),
+      );
+      const playable = loaded.filter((b): b is Uint8Array => b != null);
       if (playable.length > 0) {
         const full = playable.length === 1 ? playable[0] : concatWavs(playable);
-        const out = new File(Paths.cache, `practice-${m.sessionId}-full.wav`);
+        const out = new File(Paths.cache, `freestyle-${m.sessionId}-full.wav`);
         try {
           if (out.exists) out.delete();
         } catch {
@@ -561,48 +427,19 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         waveform = downsampleWaveform(full, 30);
       }
     } catch (e) {
-      if (__DEV__) console.warn('[practice] audio processing failed:', e);
+      if (__DEV__) console.warn('[freestyle] audio processing failed:', e);
       audioUri = null;
       waveform = null;
     }
 
-    const base = {
-      tokenized,
-      statuses,
-      insertions: aligner.committedInsertions,
+    return buildFreestyleResult({
+      transcript: m.finalParts.join(' '),
       paceWpm,
-      targetWpm: passage.targetWpm,
-      fillerCount: aligner.fillerCount,
+      fillerCount: m.fillerCount,
       durationMs,
       audioUri,
       waveform: waveform ?? waveformFromMeterHistory(m.meterHistory),
-    };
-
-    const key = process.env.EXPO_PUBLIC_AZURE_SPEECH_KEY;
-    const region = process.env.EXPO_PUBLIC_AZURE_SPEECH_REGION;
-    if (key && region) {
-      try {
-        const chunks = buildChunks(
-          tokenized,
-          aligner.timeline,
-          segmentDurations,
-          m.segmentActiveStartMs,
-        ).filter((c) => segmentBytes[c.segmentIndex] != null);
-        if (chunks.length > 0) {
-          const wavChunks = chunks.map((c) => ({
-            wavBytes: sliceWav(segmentBytes[c.segmentIndex]!, c.startMs, c.endMs),
-            referenceText: c.referenceText,
-          }));
-          const assessments = await assessSession(wavChunks, { key, region });
-          const azure = buildAzureResult({ ...base, chunks, assessments });
-          if (azure) return azure;
-        }
-      } catch (e) {
-        if (__DEV__) console.warn('[practice] Azure assessment failed:', e);
-      }
-    }
-
-    return buildLiveFallbackResult(base);
+    });
   };
 
   // ---- public API -----------------------------------------------------------
@@ -622,8 +459,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         if (m.status === 'listening' || m.status === 'processing') return;
         claimEngine(instanceId);
         resetMachine(m);
-        // Bail out immediately where SFSpeechRecognizer doesn't exist at all
-        // (e.g. iOS simulators) instead of burning the auto-restart budget.
         if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
           fail(
             'recognition-unavailable',
@@ -654,7 +489,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         const m = machineRef.current!;
         if (m.status !== 'listening') return;
         m.expectEnd = true;
-        setSpeechActive(m, false);
         meterLevel.value = withTiming(0, { duration: 160 });
         accumulate();
         setStatusSafe('paused');
@@ -669,7 +503,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         const m = machineRef.current!;
         if (m.status !== 'paused') return;
         m.listeningSinceWall = Date.now();
-        m.speechActive = false;
         setStatusSafe('listening');
         startRecognition(m.mode);
       },
@@ -698,8 +531,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
       cancel() {
         const m = machineRef.current!;
         m.expectEnd = true;
-        setSpeechActive(m, false);
-        currentWordFraction.value = 0;
         meterLevel.value = withTiming(0, { duration: 120 });
         accumulate();
         try {
@@ -717,7 +548,6 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         if (m.status === 'done' && m.result) return m.result;
         m.expectEnd = true;
         m.stopping = true;
-        setSpeechActive(m, false);
         meterLevel.value = withTiming(0, { duration: 160 });
         accumulate();
         setStatusSafe('processing');
@@ -732,15 +562,11 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         try {
           finalResult = await finishProcessing();
         } catch (e) {
-          // Absolute last resort — never dead-end.
-          if (__DEV__) console.warn('[practice] processing failed entirely:', e);
-          finalResult = buildLiveFallbackResult({
-            tokenized,
-            statuses: m.aligner.refWordStatuses(),
-            insertions: m.aligner.committedInsertions,
+          if (__DEV__) console.warn('[freestyle] processing failed entirely:', e);
+          finalResult = buildFreestyleResult({
+            transcript: m.finalParts.join(' '),
             paceWpm: 0,
-            targetWpm: passage.targetWpm,
-            fillerCount: m.aligner.fillerCount,
+            fillerCount: m.fillerCount,
             durationMs: Math.max(1, Math.round(m.accumulatedActiveMs)),
             audioUri: null,
             waveform: waveformFromMeterHistory(m.meterHistory),
@@ -751,14 +577,13 @@ export function usePracticeSession(passage: Passage): PracticeSession {
         if (mounted.current) setResult(finalResult);
         setStatusSafe('done');
         releaseEngine(instanceId);
-        // Segment files are merged into the full WAV — clean them up.
         deleteSegmentFiles(m);
         return finalResult;
       },
     };
-    // machineRef/tokenized/passage are stable for the life of a session screen.
+    // machineRef is stable for the life of the session screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [passage, tokenized, instanceId]);
+  }, [instanceId]);
 
   return {
     status,
@@ -766,9 +591,8 @@ export function usePracticeSession(passage: Passage): PracticeSession {
     elapsedMs,
     liveWpm,
     fillerCount,
-    words: tokenized.words,
-    currentWordIndex,
-    currentWordFraction,
+    finalTranscript,
+    interimTranscript,
     meterLevel,
     result,
     ...api,

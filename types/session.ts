@@ -1,5 +1,17 @@
 import type { SharedValue } from 'react-native-reanimated';
 
+import type { SessionMode, SkillKey } from './history';
+
+/** Library grouping for the Practice tab. */
+export type PassageCategory =
+  | 'stories'
+  | 'news'
+  | 'narration'
+  | 'poetry'
+  | 'twisters'
+  | 'drill'
+  | 'custom';
+
 /** A practice passage: home-card metadata plus the reading content. */
 export type Passage = {
   id: string;
@@ -13,6 +25,15 @@ export type Passage = {
   /** Full reference text. Paragraphs separated by "\n\n". */
   text: string;
   targetWpm: number;
+  category?: PassageCategory;
+  /** Skills this content trains — matched against the weakest-skill profile. */
+  skills?: SkillKey[];
+};
+
+/** A user-authored passage persisted by services/user-passages.ts. */
+export type CustomPassage = Passage & {
+  custom: true;
+  createdAt: number;
 };
 
 export type PracticeStatus =
@@ -44,6 +65,10 @@ export type ResultWord = {
 };
 
 export type SessionResult = {
+  /** Defaults to 'passage' when absent (pre-freestyle results). */
+  mode?: SessionMode;
+  /** Freestyle only: the full recognized transcript. */
+  transcript?: string;
   /** 0–100 blended score (pronunciation + pace + fillers). */
   overallScore: number;
   accuracy: number;
@@ -93,6 +118,28 @@ export type PracticeSession = {
   /** Abandon the session entirely (dismiss): stop everything, discard recordings. */
   cancel(): void;
   /** Ends the session: → 'processing' → 'done'. Resolves with the final result. */
+  stop(): Promise<SessionResult>;
+};
+
+/** Freestyle (impromptu) session: same lifecycle as PracticeSession but the
+ * live surface is a growing transcript instead of a passage frontier. */
+export type FreestyleSession = {
+  status: PracticeStatus;
+  error: PracticeError | null;
+  elapsedMs: number;
+  liveWpm: number;
+  fillerCount: number;
+  /** Committed (final-result) transcript so far. */
+  finalTranscript: string;
+  /** In-flight interim tail, replaced as the recognizer refines it. */
+  interimTranscript: string;
+  meterLevel: SharedValue<number>;
+  result: SessionResult | null;
+  start(): Promise<void>;
+  pause(): void;
+  resume(): void;
+  restart(): void;
+  cancel(): void;
   stop(): Promise<SessionResult>;
 };
 

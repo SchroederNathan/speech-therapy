@@ -20,6 +20,7 @@
     "expo-glass-effect": "~57.0.1",
     "expo-haptics": "~57.0.1",
     "expo-linking": "~57.0.4",
+    "expo-observe": "~57.0.8",
     "expo-router": "~57.0.8",
     "expo-speech-recognition": "^56.0.1",
     "expo-status-bar": "~57.0.1",

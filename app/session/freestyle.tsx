@@ -1,26 +1,22 @@
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, useColorScheme, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { LiveTranscript } from '@/components/session/live-transcript';
 import { LiveWpm } from '@/components/session/live-wpm';
 import { PracticeControls } from '@/components/session/practice-controls';
 import { SessionTopBar } from '@/components/session/session-top-bar';
-import {
-  Teleprompter,
-  type TeleprompterColors,
-} from '@/components/session/teleprompter';
 import { palette } from '@/constants/colors';
-import { PASSAGES } from '@/constants/passages';
 import {
   sessionColors,
   TELEPROMPTER_TEXT_SIZES,
 } from '@/constants/session-theme';
-import { usePracticeSession } from '@/hooks/use-practice-session';
-import { getAnyPassage, modeForId } from '@/lib/passage-catalog';
-import { tokenizePassage } from '@/lib/passage-text';
+import { getTopic, TOPICS } from '@/constants/topics';
+import { useFreestyleSession } from '@/hooks/use-freestyle-session';
 import { recordSession } from '@/services/session-history';
+import { FREESTYLE_TARGET_WPM } from '@/services/scoring';
 
 import { useSessionContext } from './_layout';
 
@@ -32,12 +28,9 @@ function dismissToHome() {
   }
 }
 
-export default function PracticeScreen() {
-  const { passageId } = useLocalSearchParams<{ passageId: string }>();
-  const found = getAnyPassage(passageId);
-  // Hooks must run unconditionally; the guard effect below backs out of the
-  // route when the id is unknown before anything is visible.
-  const passage = found ?? PASSAGES[0];
+export default function FreestyleScreen() {
+  const { topicId } = useLocalSearchParams<{ topicId?: string }>();
+  const topic = getTopic(topicId) ?? TOPICS[0];
 
   const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
   const colors = sessionColors[scheme];
@@ -46,14 +39,13 @@ export default function PracticeScreen() {
   const { height: windowHeight } = useWindowDimensions();
   const { setResult, retryToken } = useSessionContext();
 
-  const session = usePracticeSession(passage);
-  const tokenized = useMemo(() => tokenizePassage(passage.text), [passage.text]);
+  const session = useFreestyleSession();
 
   const [sizeIndex, setSizeIndex] = useState(1);
   const fontSize = TELEPROMPTER_TEXT_SIZES[sizeIndex];
 
-  // The session object is rebuilt every render (live fields); keep a ref so
-  // stable effects/callbacks always act on the latest instance.
+  // Same contract as the passage screen: live fields rebuild the session
+  // object every render; stable effects/callbacks act through a ref.
   const sessionRef = useRef(session);
   const navigatedRef = useRef(false);
 
@@ -61,12 +53,6 @@ export default function PracticeScreen() {
     sessionRef.current = session;
   }, [session]);
 
-  useEffect(() => {
-    if (!found) router.back();
-  }, [found]);
-
-  // Explicit start on mount (per contract — never auto inside the hook), and
-  // cancel anything still running if the whole session flow unmounts.
   useEffect(() => {
     sessionRef.current.start();
     return () => {
@@ -91,18 +77,13 @@ export default function PracticeScreen() {
     try {
       const result = await sessionRef.current.stop();
       // Once per attempt (navigatedRef); each retry becomes its own record.
-      recordSession(result, { mode: modeForId(passage.id), passageId: passage.id });
+      recordSession(result, { mode: 'freestyle', topicId: topic.id });
       setResult(result);
       router.push('/session/results');
     } catch {
       navigatedRef.current = false;
     }
-  }, [setResult, passage.id]);
-
-  // The session can complete on its own (end of passage reached).
-  useEffect(() => {
-    if (session.status === 'done') finishSession();
-  }, [session.status, finishSession]);
+  }, [setResult, topic.id]);
 
   const handleDismiss = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -137,34 +118,26 @@ export default function PracticeScreen() {
     finishSession();
   }, [finishSession]);
 
-  const teleColors: TeleprompterColors = useMemo(
-    () => ({
-      foreground: screenPalette.foreground,
-      dimmed: colors.dimmed,
-      accent: colors.accent,
-      accentFaded: colors.accentFaded,
-    }),
-    [screenPalette, colors],
-  );
-
-  if (!found) return null;
-
   const contentTop = insets.top + 82;
 
   return (
     <View style={[styles.screen, { backgroundColor: screenPalette.background }]}>
-      <Teleprompter
-        tokenized={tokenized}
-        currentWordIndex={session.currentWordIndex}
-        wordProgress={session.currentWordFraction}
+      <LiveTranscript
+        finalText={session.finalTranscript}
+        interimText={session.interimTranscript}
+        placeholder={topic.prompt}
         fontSize={fontSize}
-        colors={teleColors}
+        colors={{
+          foreground: screenPalette.foreground,
+          dimmed: colors.dimmed,
+          accent: colors.accent,
+        }}
         topInset={contentTop}
         bottomInset={windowHeight * 0.55}
       />
 
       <SessionTopBar onDismiss={handleDismiss} onTextSize={handleTextSize}>
-        <LiveWpm liveWpm={session.liveWpm} targetWpm={passage.targetWpm} />
+        <LiveWpm liveWpm={session.liveWpm} targetWpm={FREESTYLE_TARGET_WPM} />
       </SessionTopBar>
 
       <PracticeControls

@@ -1,4 +1,8 @@
 export type SpeechCoachStats = {
+  /** 'passage' | 'drill' read against a reference text; 'freestyle' impromptu. */
+  mode: 'passage' | 'drill' | 'freestyle';
+  /** Freestyle only: the recognized transcript, capped for the prompt. */
+  transcriptExcerpt?: string;
   overallScore: number;
   accuracy: number;
   fluency: number;

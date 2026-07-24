@@ -19,18 +19,26 @@ export type MetricGridProps = {
   result: SessionResult;
 };
 
-/** 2×3 metric cards: Accuracy, Fluency, Pace / Fillers, Complete, Intonation. */
+/** 2×3 metric cards: Accuracy, Fluency, Pace / Fillers, Complete, Intonation.
+ * Freestyle sessions have no reference text, so the text-relative metrics
+ * (accuracy, completeness) and the placeholder intonation drop to one row:
+ * Fluency, Pace, Fillers. */
 export function MetricGrid({ result }: MetricGridProps) {
   const { width: screenWidth } = useWindowDimensions();
   const cardWidth = (screenWidth - SCREEN_PADDING * 2 - GAP * 2) / 3;
+  const freestyle = result.mode === 'freestyle';
 
   const metrics: MetricSpec[] = [
-    {
-      label: 'Accuracy',
-      value: result.accuracy,
-      unit: '%',
-      tone: metricTone('accuracy', result.accuracy),
-    },
+    ...(freestyle
+      ? []
+      : [
+          {
+            label: 'Accuracy',
+            value: result.accuracy,
+            unit: '%',
+            tone: metricTone('accuracy', result.accuracy),
+          } satisfies MetricSpec,
+        ]),
     {
       label: 'Fluency',
       value: result.fluency,
@@ -48,19 +56,26 @@ export function MetricGrid({ result }: MetricGridProps) {
       value: result.fillerCount,
       tone: metricTone('fillers', result.fillerCount),
     },
-    {
-      label: 'Complete',
-      value: result.completeness,
-      unit: '%',
-      tone: metricTone('completeness', result.completeness),
-    },
-    {
-      // Prosody score out of 100, not a percentage — no unit (matches design).
-      label: 'Intonation',
-      value: result.intonation,
-      // Live-fallback intonation is a guess, not a measurement — de-emphasize.
-      tone: result.source === 'live' ? 'neutral' : metricTone('intonation', result.intonation),
-    },
+    ...(freestyle
+      ? []
+      : [
+          {
+            label: 'Complete',
+            value: result.completeness,
+            unit: '%',
+            tone: metricTone('completeness', result.completeness),
+          } satisfies MetricSpec,
+          {
+            // Prosody score out of 100, not a percentage — no unit (matches design).
+            label: 'Intonation',
+            value: result.intonation,
+            // Live-fallback intonation is a guess, not a measurement — de-emphasize.
+            tone:
+              result.source === 'live'
+                ? ('neutral' as const)
+                : metricTone('intonation', result.intonation),
+          } satisfies MetricSpec,
+        ]),
   ];
 
   return (

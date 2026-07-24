@@ -19,7 +19,12 @@ function challengePriority(word: ResultWord): number {
   return 200;
 }
 
-export function buildSpeechCoachStats(result: SessionResult): SpeechCoachStats {
+/** Per-verdict counts plus the ≤5 hardest words — the summary both the AI
+ * coach payload and the persisted SessionRecord keep instead of `words[]`. */
+export function summarizeWords(words: readonly ResultWord[]): {
+  wordCounts: SpeechCoachStats['wordCounts'];
+  challengingWords: string[];
+} {
   const wordCounts: SpeechCoachStats['wordCounts'] = {
     good: 0,
     mispronounced: 0,
@@ -27,16 +32,31 @@ export function buildSpeechCoachStats(result: SessionResult): SpeechCoachStats {
     inserted: 0,
   };
 
-  for (const word of result.words) wordCounts[word.status] += 1;
+  for (const word of words) wordCounts[word.status] += 1;
 
-  const challengingWords = result.words
+  const challengingWords = words
     .filter((word) => word.status !== 'good')
     .sort((a, b) => challengePriority(a) - challengePriority(b))
     .map((word) => word.word.trim().slice(0, 40))
-    .filter((word, index, words) => word.length > 0 && words.indexOf(word) === index)
+    .filter((word, index, list) => word.length > 0 && list.indexOf(word) === index)
     .slice(0, MAX_CHALLENGING_WORDS);
 
+  return { wordCounts, challengingWords };
+}
+
+const MAX_TRANSCRIPT_EXCERPT = 1_200;
+
+export function buildSpeechCoachStats(result: SessionResult): SpeechCoachStats {
+  const { wordCounts, challengingWords } = summarizeWords(result.words);
+  const mode = result.mode ?? 'passage';
+  const transcriptExcerpt =
+    mode === 'freestyle' && result.transcript
+      ? result.transcript.slice(0, MAX_TRANSCRIPT_EXCERPT)
+      : undefined;
+
   return {
+    mode,
+    ...(transcriptExcerpt != null ? { transcriptExcerpt } : {}),
     overallScore: result.overallScore,
     accuracy: result.accuracy,
     fluency: result.fluency,

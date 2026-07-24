@@ -19,6 +19,10 @@
  * the self-test scripts.
  */
 
+// Filler lexicon (shared with the freestyle session), applied here to
+// final-committed insertions only (words that did NOT match the reference —
+// "so" spoken where the passage says "so" is never a filler).
+import { FILLER_BIGRAMS, FILLER_UNIGRAMS } from '@/lib/fillers';
 import { normalizeToken, type TokenizedPassage } from '@/lib/passage-text';
 
 /** Kept as a public compatibility constant for the self-tests and callers. */
@@ -34,37 +38,6 @@ const WPM_WINDOW_MS = 15_000;
 const WPM_MIN_ELAPSED_MS = 5_000;
 /** ...and until the sample window spans at least this long. */
 const WPM_MIN_SPAN_MS = 2_000;
-
-/**
- * Filler lexicon, applied to final-committed insertions only (words that did
- * NOT match the reference — "so" spoken where the passage says "so" is never
- * a filler).
- */
-const FILLER_UNIGRAMS = new Set([
-  'um',
-  'umm',
-  'uh',
-  'uhh',
-  'uhm',
-  'er',
-  'err',
-  'ah',
-  'ahh',
-  'hmm',
-  'hm',
-  'mmm',
-  'like',
-  'so',
-  'basically',
-  'actually',
-  'literally',
-  'right',
-  'well',
-  'okay',
-  'ok',
-  'anyway',
-]);
-const FILLER_BIGRAMS = new Set(['you know', 'i mean', 'sort of', 'kind of']);
 
 export type TranscriptSegmentTiming = {
   /** Ms offset of the utterance start within the current recording segment. */
